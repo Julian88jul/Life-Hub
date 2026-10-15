@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Life Hub">
+  <title>Life Hub</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+  <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
+  <link rel="stylesheet" href="style.css?v=15">
+</head>
+<body>
+  <div id="boot-error" class="boot-error" hidden></div>
+  <!-- Login -->
+  <section id="auth" class="auth" hidden>
+    <form id="auth-form" class="auth-card" autocomplete="on">
+      <img src="icon.svg" alt="" width="64" height="64">
+      <h1>Life Hub</h1>
+      <p class="muted" id="auth-sub">Melde dich an.</p>
+      <label>Benutzername<input id="a-user" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="32"></label>
+      <label>Passwort<input id="a-pass" type="password" autocomplete="current-password" required minlength="8" maxlength="200"></label>
+      <label id="a-code-wrap" hidden>Einladungscode<input id="a-code" type="text" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <p class="error" id="a-error" hidden></p>
+      <button type="submit" class="btn primary" id="a-submit">Anmelden</button>
+      <button type="button" class="text-btn" id="a-toggle">Neu hier? Registrieren</button>
+    </form>
+  </section>
+
+  <main id="app" hidden>
+    <section id="view-today" class="view active" aria-label="Heute">
+      <header class="top">
+        <div>
+          <p class="eyebrow" id="today-date"></p>
+          <h1 id="today-greeting">Hallo</h1>
+        </div>
+        <div class="top-actions">
+          <button type="button" class="chip" id="loc-chip" aria-label="Ort ändern" aria-expanded="false">📍 <span id="loc-name">Berlin</span></button>
+          <button type="button" class="icon-btn small" id="theme-btn" aria-label="Hell oder dunkel umschalten" title="Hell/Dunkel">🌓</button>
+        </div>
+      </header>
+      <div class="card loc-panel" id="loc-panel" hidden>
+        <form id="loc-form" class="inline-form">
+          <input id="loc-input" type="search" placeholder="Ort suchen, z. B. Hamburg" autocomplete="off" aria-label="Ort suchen">
+          <button type="submit" class="btn primary small">Suchen</button>
+        </form>
+        <ul class="result-list" id="loc-results"></ul>
+      </div>
+
+      <div class="card">
+        <div class="row-between">
+          <h2 id="w-title">Wetter</h2>
+          <div class="seg" role="group" aria-label="Tag wählen">
+            <button type="button" data-wday="0" class="active">Heute</button>
+            <button type="button" data-wday="1">Morgen</button>
+          </div>
+        </div>
+        <div class="weather" id="weather"></div>
+        <p class="hint left" id="w-msg"></p>
+      </div>
+
+      <div class="card" id="today-classes-card" hidden>
+        <div class="row-between">
+          <h2>Stundenplan heute</h2>
+          <button type="button" class="text-btn" data-goto="plan">Öffnen</button>
+        </div>
+        <ul class="class-list compact" id="today-classes"></ul>
+      </div>
+
+      <div class="card">
+        <h2>Heute</h2>
+        <ul class="event-list" id="today-events"></ul>
+      </div>
+      <div class="card">
+        <h2>Nächste 7 Tage</h2>
+        <ul class="event-list" id="upcoming-events"></ul>
+      </div>
+      <div class="tiles">
+        <div class="tile disabled"><span>✉️</span><b>E-Mails</b><small>bald</small></div>
+        <div class="tile" data-goto="todos"><span>✅</span><b>Aufgaben</b><small id="tile-tasks-sub">öffnen</small></div>
+        <div class="tile disabled"><span>💡</span><b>Licht</b><small>später</small></div>
+        <div class="tile" data-goto="chat"><span>💬</span><b>Assistent</b><small>fragen</small></div>
+      </div>
+
+      <div class="card settings">
+        <h2>Einstellungen</h2>
+        <div class="row-between theme-row">
+          <span class="muted">Darstellung</span>
+          <div class="seg" id="theme-seg" role="group" aria-label="Darstellung">
+            <button type="button" data-theme-set="light">Hell</button>
+            <button type="button" data-theme-set="dark">Dunkel</button>
+          </div>
+        </div>
+        <div class="row-between account">
+          <span class="muted" id="whoami"></span>
+          <div class="account-actions">
+            <button type="button" class="text-btn" id="pw-open">Passwort ändern</button>
+            <button type="button" class="text-btn" id="logout">Abmelden</button>
+          </div>
+        </div>
+        <p class="status" id="status-line"></p>
+      </div>
+    </section>
+
+    <section id="view-calendar" class="view" aria-label="Kalender">
+      <header class="cal-head">
+        <button class="icon-btn" id="cal-prev" aria-label="Vorheriger Monat">‹</button>
+        <div class="cal-title-wrap">
+          <h1 id="cal-title"></h1>
+          <button type="button" class="chip" id="cal-today" hidden>Heute</button>
+        </div>
+        <button class="icon-btn" id="cal-next" aria-label="Nächster Monat">›</button>
+      </header>
+      <div class="cal-weekdays" aria-hidden="true">
+        <span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span>
+      </div>
+      <div id="cal-grid" class="cal-grid"></div>
+      <p class="hint" id="cal-hint">Tag gedrückt halten für einen Termin. Ohne loszulassen nach links oder rechts ziehen für mehrere Tage. Termine antippen zum Bearbeiten.</p>
+      <div class="card">
+        <div class="row-between">
+          <h2 id="day-title"></h2>
+          <div class="account-actions">
+            <button class="text-btn" id="cal-import" type="button">📷 Bild</button>
+            <button class="text-btn" id="day-add">+ Termin</button>
+          </div>
+        </div>
+        <ul class="event-list" id="day-events"></ul>
+      </div>
+    </section>
+
+    <section id="view-plan" class="view" aria-label="Stundenplan">
+      <header class="top">
+        <div>
+          <p class="eyebrow">Wöchentlich</p>
+          <h1>Stundenplan</h1>
+        </div>
+        <div class="top-actions">
+          <button type="button" class="chip" id="plan-import" aria-label="Stundenplan aus Foto importieren">📷 Aus Foto</button>
+        </div>
+      </header>
+      <div class="seg full" id="plan-mode" role="group" aria-label="Ansicht">
+        <button type="button" data-pmode="day" class="active">Tag</button>
+        <button type="button" data-pmode="week">Woche</button>
+      </div>
+      <div class="day-pills" id="plan-days" role="group" aria-label="Wochentag"></div>
+      <ul class="class-list" id="plan-list"></ul>
+      <p class="hint" id="plan-empty" hidden></p>
+    </section>
+
+    <section id="view-todos" class="view" aria-label="Aufgaben">
+      <div id="todo-overview">
+        <header class="top">
+          <div>
+            <p class="eyebrow">Deine Listen</p>
+            <h1>Aufgaben</h1>
+          </div>
+        </header>
+        <div class="list-grid" id="list-grid"></div>
+        <p class="hint" id="list-hint" hidden>Lege deine erste Liste an, z. B. „Uni“ oder „Einkauf“.</p>
+      </div>
+
+      <div id="todo-detail" hidden>
+        <header class="detail-head">
+          <button type="button" class="icon-btn" id="todo-back" aria-label="Zurück zu den Listen">‹</button>
+          <div class="detail-title"><span class="detail-emoji" id="td-emoji"></span><h1 id="td-name"></h1></div>
+          <div class="top-actions">
+            <button type="button" class="icon-btn" id="td-edit" aria-label="Liste bearbeiten">✏️</button>
+            <button type="button" class="icon-btn" id="td-delete" aria-label="Liste löschen">🗑</button>
+          </div>
+        </header>
+        <div class="progress" aria-hidden="true"><div class="bar" id="td-bar"></div></div>
+        <p class="muted" id="td-count"></p>
+        <p class="muted empty-tasks" id="td-empty" hidden>Noch nichts hier. Tippe unten auf „Aufgabe“.</p>
+        <ul class="task-list" id="task-open"></ul>
+        <div class="row-between done-head" id="done-head" hidden>
+          <h2>Erledigt</h2>
+          <button type="button" class="text-btn" id="clear-done">Erledigte löschen</button>
+        </div>
+        <ul class="task-list done" id="task-done"></ul>
+      </div>
+    </section>
+
+    <section id="view-chat" class="view" aria-label="Assistent">
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <input id="chat-input" type="text" placeholder="Frag mich etwas …" enterkeyhint="send" required>
+        <button type="submit" id="chat-send" aria-label="Senden">↑</button>
+      </form>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbar" aria-label="Hauptnavigation" hidden>
+    <button data-tab="today" class="active"><span>🏠</span>Heute</button>
+    <button data-tab="calendar"><span>📅</span>Kalender</button>
+    <button data-tab="plan"><span>🗓️</span>Stundenplan</button>
+    <button data-tab="todos"><span>✅</span>Aufgaben</button>
+    <button data-tab="chat"><span>💬</span>Assistent</button>
+  </nav>
+
+  <div id="sheet-backdrop" class="backdrop" hidden></div>
+  <form id="sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2 id="sheet-title">Neuer Termin</h2>
+    <label>Titel<input id="f-title" type="text" required maxlength="200" placeholder="z. B. Klausurenphase"></label>
+    <div class="two">
+      <label>Von<input id="f-date" type="date" required></label>
+      <label>Bis<input id="f-end-date" type="date" required></label>
+    </div>
+    <div class="two">
+      <label>Beginn<input id="f-start" type="time"></label>
+      <label>Ende<input id="f-end" type="time"></label>
+    </div>
+    <fieldset class="colors">
+      <legend>Farbe</legend>
+      <div class="swatches" id="f-colors" role="radiogroup" aria-label="Farbe"></div>
+    </fieldset>
+    <label>Symbol (optional)<input id="f-icon" type="text" maxlength="16" placeholder="z. B. 🩺 für Arzt" autocomplete="off"></label>
+    <div class="emoji-quick" id="f-quick" aria-label="Symbol auswählen"></div>
+    <label>Notiz<textarea id="f-note" rows="2" maxlength="2000"></textarea></label>
+    <p class="error" id="f-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="f-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary">Speichern</button>
+    </div>
+  </form>
+
+  <button type="button" class="fab" id="task-fab" hidden><span aria-hidden="true">＋</span> Aufgabe</button>
+  <button type="button" class="fab" id="plan-fab" hidden><span aria-hidden="true">＋</span> Eintrag</button>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div class="drop-overlay" id="drop-overlay" hidden><div>📷 Bild hier ablegen</div></div>
+
+  <form id="task-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2 id="t-heading">Neue Aufgabe</h2>
+    <label>Was ist zu tun?<input id="t-title" type="text" required maxlength="300" placeholder="z. B. Skript drucken" enterkeyhint="done" autocomplete="off"></label>
+    <div class="chips" id="t-chips" role="group" aria-label="Fälligkeit">
+      <button type="button" data-offset="0">Heute</button>
+      <button type="button" data-offset="1">Morgen</button>
+      <button type="button" data-offset="7">In einer Woche</button>
+      <button type="button" data-offset="">Kein Datum</button>
+    </div>
+    <label>Fällig am (optional)<input id="t-date" type="date"></label>
+    <p class="error" id="t-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="t-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary" id="t-submit">Hinzufügen</button>
+    </div>
+    <button type="button" class="text-btn wide" id="t-more">Hinzufügen und noch eine</button>
+  </form>
+
+  <form id="class-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2 id="c-heading">Neuer Eintrag</h2>
+    <label>Veranstaltung<input id="c-title" type="text" required maxlength="120" placeholder="z. B. Mathematik 1" autocomplete="off"></label>
+    <label>Wochentag
+      <select id="c-day">
+        <option value="1">Montag</option><option value="2">Dienstag</option><option value="3">Mittwoch</option>
+        <option value="4">Donnerstag</option><option value="5">Freitag</option><option value="6">Samstag</option><option value="7">Sonntag</option>
+      </select>
+    </label>
+    <div class="two">
+      <label>Beginn<input id="c-start" type="time" required></label>
+      <label>Ende<input id="c-end" type="time"></label>
+    </div>
+    <label>Raum / Ort (optional)<input id="c-room" type="text" maxlength="80" placeholder="z. B. Hörsaal 3" autocomplete="off"></label>
+    <fieldset class="colors">
+      <legend>Farbe</legend>
+      <div class="swatches" id="c-colors" role="radiogroup" aria-label="Farbe"></div>
+    </fieldset>
+    <p class="error" id="c-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="c-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary">Speichern</button>
+    </div>
+    <button type="button" class="text-btn wide danger" id="c-delete" hidden>Eintrag löschen</button>
+  </form>
+
+  <form id="import-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2 id="imp-title">Termine aus Bild</h2>
+    <p class="muted" id="imp-lead"></p>
+    <div class="seg full" id="imp-mode" role="group" aria-label="Wohin soll das Bild?" hidden>
+      <button type="button" data-imode="events" class="active">In den Kalender</button>
+      <button type="button" data-imode="timetable">In den Stundenplan</button>
+    </div>
+    <div id="imp-select">
+      <label class="dropzone" id="imp-drop">
+        <input id="imp-file" type="file" accept="image/*" multiple hidden>
+        <span class="dz-icon" aria-hidden="true">📷</span>
+        <b>Bild auswählen</b>
+        <small>oder hierher ziehen oder mit Strg+V einfügen (bis zu 5 Bilder)</small>
+      </label>
+      <div class="imp-thumbs" id="imp-thumbs"></div>
+    </div>
+    <div id="imp-review" hidden>
+      <h3 class="prop-head" id="imp-events-head">Termine</h3>
+      <ul class="prop-list" id="imp-events"></ul>
+      <h3 class="prop-head" id="imp-classes-head">Stundenplan</h3>
+      <ul class="prop-list" id="imp-classes"></ul>
+      <p class="muted" id="imp-remarks"></p>
+    </div>
+    <p class="muted" id="imp-status"></p>
+    <p class="error" id="imp-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="imp-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary" id="imp-submit" disabled>Analysieren</button>
+    </div>
+    <p class="hint left">Bilder werden zur Auswertung an Google Gemini gesendet. Keine Bilder mit vertraulichen Inhalten verwenden.</p>
+  </form>
+
+  <form id="pw-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2>Passwort ändern</h2>
+    <label>Altes Passwort<input id="pw-old" type="password" autocomplete="current-password" required maxlength="200"></label>
+    <label>Neues Passwort (mindestens 8 Zeichen)<input id="pw-new" type="password" autocomplete="new-password" required minlength="8" maxlength="200"></label>
+    <label>Neues Passwort wiederholen<input id="pw-new2" type="password" autocomplete="new-password" required minlength="8" maxlength="200"></label>
+    <p class="error" id="pw-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="pw-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary">Ändern</button>
+    </div>
+  </form>
+
+  <form id="list-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2 id="l-heading">Neue Liste</h2>
+    <label>Name<input id="l-name" type="text" required maxlength="60" placeholder="z. B. Uni"></label>
+    <label>Symbol (Emoji)<input id="l-emoji" type="text" required maxlength="16" value="📝" autocomplete="off"></label>
+    <div class="emoji-quick" id="l-quick" aria-label="Symbol auswählen"></div>
+    <fieldset class="colors">
+      <legend>Farbe</legend>
+      <div class="swatches" id="l-colors" role="radiogroup" aria-label="Farbe"></div>
+    </fieldset>
+    <p class="error" id="l-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="l-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary" id="l-submit">Anlegen</button>
+    </div>
+  </form>
+
+  <script src="config.js?v=15"></script>
+  <script src="app.js?v=15"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+backend/.venv/
+backend/.env
+backend/hub.db
+backend/backups/
+__pycache__/

@@ -1,0 +1,1368 @@
+(() => {
+  "use strict";
+
+  const API = (window.HUB_API || "").replace(/\/$/, "");
+
+  // ---------- Hilfsfunktionen ----------
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, "0");
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; // lokal, nicht UTC
+  const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+  const WEEKDAYS = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
+  const longDate = (s) => { const d = parseIso(s); return `${WEEKDAYS[d.getDay()]}, ${d.getDate()}. ${MONTHS[d.getMonth()]}`; };
+  const shortDate = (s) => { const d = parseIso(s); return `${d.getDate()}.${d.getMonth() + 1}.`; };
+  const DEFAULT_COLOR = "#4f46e5";
+  const PALETTE = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#8b5cf6", "#64748b"];
+  const COLOR_NAMES = ["Indigo", "Blau", "Grün", "Orange", "Rot", "Pink", "Violett", "Grau"];
+
+  function el(tag, props = {}, ...children) {
+    const node = document.createElement(tag);
+    Object.assign(node, props);
+    for (const c of children) node.append(c);
+    return node;
+  }
+
+  const store = {
+    get(k, fallback) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback; } catch { return fallback; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* privater Modus */ } },
+    del(k) { try { localStorage.removeItem(k); } catch { /* egal */ } },
+  };
+
+  // ---------- Login / API ----------
+  let token = store.get("token", "");
+
+  async function api(path, opts = {}) {
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    let res;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 75000);
+    try {
+      res = await fetch(API + path, { ...opts, headers, signal: ctrl.signal, body: opts.body ? JSON.stringify(opts.body) : undefined });
+    } catch (err) {
+      throw new Error(err && err.name === "AbortError" ? "Keine Antwort vom Server (Zeitüberschreitung). Bitte nochmal versuchen." : "Server nicht erreichbar.");
+    } finally { clearTimeout(timer); }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && token) { logout(false); throw new Error(data.detail || "Bitte neu anmelden."); }
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Fehler ${res.status}`);
+    return data;
+  }
+
+  let registerMode = false;
+  function setAuthMode(register) {
+    registerMode = register;
+    $("a-code-wrap").hidden = !register;
+    $("a-code").required = register;
+    $("a-pass").autocomplete = register ? "new-password" : "current-password";
+    $("a-submit").textContent = register ? "Registrieren" : "Anmelden";
+    $("a-toggle").textContent = register ? "Schon ein Konto? Anmelden" : "Neu hier? Registrieren";
+    $("auth-sub").textContent = register ? "Neues Konto mit Einladungscode anlegen." : "Melde dich an.";
+    $("a-error").hidden = true;
+  }
+  $("a-toggle").addEventListener("click", () => setAuthMode(!registerMode));
+
+  $("auth-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = { username: $("a-user").value.trim(), password: $("a-pass").value };
+    if (registerMode) body.code = $("a-code").value.trim();
+    $("a-submit").disabled = true;
+    try {
+      const res = await api(registerMode ? "/api/auth/register" : "/api/auth/login", { method: "POST", body });
+      token = res.token;
+      store.set("token", token);
+      store.set("user", res.username);
+      $("a-pass").value = "";
+      startApp();
+    } catch (err) {
+      $("a-error").textContent = err.message;
+      $("a-error").hidden = false;
+    } finally { $("a-submit").disabled = false; }
+  });
+
+  function logout(clearChat = true) {
+    token = "";
+    store.del("token");
+    if (clearChat) { store.del("chat"); history = []; log.replaceChildren(); }
+    $("app").hidden = true;
+    $("tabbar").hidden = true;
+    $("auth").hidden = false;
+  }
+  $("logout").addEventListener("click", () => logout(true));
+
+  // ---------- Hell / Dunkel ----------
+  const THEMES = ["light", "dark"];
+  const systemTheme = () => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  // Ohne bisherige Wahl gilt zunächst die Einstellung des Geräts; danach zählt nur noch die eigene Wahl
+  function currentTheme() { const t = store.get("theme", null); return THEMES.includes(t) ? t : systemTheme(); }
+  function applyTheme(mode, save = true) {
+    document.documentElement.setAttribute("data-theme", mode);
+    if (save) store.set("theme", mode);
+    document.querySelectorAll("[data-theme-set]").forEach((b) => b.classList.toggle("active", b.dataset.themeSet === mode));
+    $("theme-btn").textContent = mode === "dark" ? "☀️" : "🌙"; // zeigt, wohin der Knopf umschaltet
+  }
+  document.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => applyTheme(b.dataset.themeSet)));
+  $("theme-btn").addEventListener("click", () => applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"));
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!store.get("theme", null)) applyTheme(systemTheme(), false); });
+  applyTheme(currentTheme(), false);
+
+  // ---------- Tabs ----------
+  function showTab(name) {
+    document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
+    document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    if (name === "today") renderToday();
+    if (name === "calendar") loadMonth();
+    $("task-fab").hidden = !(name === "todos" && todoState.openId !== null);
+    $("plan-fab").hidden = name !== "plan";
+    if (name === "plan") loadPlan();
+    if (name === "todos") loadTodos();
+    if (name === "chat") scrollChat();
+    store.set("tab", name);
+  }
+  document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  document.querySelectorAll("[data-goto]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.goto)));
+
+  // ---------- Terminlisten ----------
+  const covers = (ev, key) => ev.start_date <= key && ev.end_date >= key;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Zeitangabe passend zum angezeigten Tag (bei mehrtägigen Terminen: Start-, Zwischen- und Endtag)
+  function timeLabel(ev, day) {
+    if (ev.start_date === ev.end_date) {
+      if (!ev.start_time) return "ganztägig";
+      return ev.start_time + (ev.end_time ? `–${ev.end_time}` : "");
+    }
+    if (day === ev.start_date) return ev.start_time ? `ab ${ev.start_time}` : "ganztägig";
+    if (day === ev.end_date) return ev.end_time ? `bis ${ev.end_time}` : "ganztägig";
+    return "ganztägig";
+  }
+
+  function eventItem(ev, day, onChange) {
+    const main = el("div", { className: "event-main" }, el("b", { textContent: (ev.icon ? ev.icon + " " : "") + ev.title }));
+    if (ev.start_date !== ev.end_date) main.append(el("small", { textContent: `${shortDate(ev.start_date)} – ${shortDate(ev.end_date)}` }));
+    if (ev.note) main.append(el("small", { textContent: ev.note }));
+    main.classList.add("clickable");
+    main.addEventListener("click", () => openSheet(ev.start_date, ev.end_date, ev)); // Bearbeiten
+    const del = el("button", { className: "event-del", type: "button", textContent: "✕", ariaLabel: "Termin löschen" });
+    del.addEventListener("click", async () => {
+      if (!confirm(`„${ev.title}" löschen?`)) return;
+      try { await api(`/api/events/${ev.id}`, { method: "DELETE" }); onChange(); } catch (e) { alert(e.message); }
+    });
+    const color = el("span", { className: "event-color" });
+    color.style.setProperty("--c", ev.color || DEFAULT_COLOR);
+    return el("li", {}, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main, del);
+  }
+
+  // ---------- Aufgaben-Zeile (überall gleich: Heute, Kalender, Listen) ----------
+  function checkSvg() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", "M5 12.5l4.5 4.5L19 7.5");
+    path.setAttribute("pathLength", "24");
+    svg.append(path);
+    return svg;
+  }
+
+  function dueInfo(t) {
+    if (!t.due_date) return null;
+    const today = iso(new Date());
+    const tomorrow = iso(addDays(new Date(), 1));
+    const overdue = !t.done && t.due_date < today;
+    const text = t.due_date === today ? "heute" : t.due_date === tomorrow ? "morgen" : overdue ? `überfällig · ${shortDate(t.due_date)}` : shortDate(t.due_date);
+    return { text, overdue };
+  }
+
+  function taskRow(t, opts = {}) {
+    const li = el("li", { className: "task" + (t.done ? " done" : "") + (opts.enter ? " enter" : "") });
+    li.style.setProperty("--c", t.list_color || DEFAULT_COLOR);
+    const check = el("button", { type: "button", className: "check", ariaLabel: t.done ? "Als offen markieren" : "Abhaken" });
+    check.setAttribute("aria-pressed", String(t.done));
+    check.append(checkSvg());
+    check.addEventListener("click", () => opts.onToggle(t, li));
+    const main = el("div", { className: "task-main" }, el("span", { className: "task-title", textContent: t.title }));
+    const due = dueInfo(t);
+    const bits = [];
+    if (opts.showList) bits.push(`${t.list_emoji || ""} ${t.list_name || ""}`.trim());
+    if (due) bits.push(due.text);
+    if (bits.length) main.append(el("small", { className: "task-meta" + (due && due.overdue ? " overdue" : ""), textContent: bits.join(" · ") }));
+    if (opts.onEdit) { main.classList.add("clickable"); main.addEventListener("click", () => opts.onEdit(t)); }
+    li.append(check, main);
+    if (opts.onDelete) {
+      const del = el("button", { className: "event-del", type: "button", textContent: "✕", ariaLabel: "Aufgabe löschen" });
+      del.addEventListener("click", () => opts.onDelete(t, li));
+      li.append(del);
+    }
+    return li;
+  }
+
+  // Abhaken mit Animation: erst der Haken/Strich, dann (nach kurzer Pause) wandert die Zeile
+  async function toggleTask(t, li, after) {
+    const next = !t.done;
+    li.classList.toggle("done", next);
+    const btn = li.querySelector(".check");
+    btn.setAttribute("aria-pressed", String(next));
+    btn.disabled = true;
+    try {
+      const row = await api(`/api/todos/${t.id}`, { method: "PATCH", body: { done: next } });
+      Object.assign(t, row);
+      await sleep(next ? 450 : 150);
+      if (after) after(next);
+    } catch (e) {
+      li.classList.toggle("done", !next);
+      btn.setAttribute("aria-pressed", String(!next));
+      btn.disabled = false;
+      alert(e.message);
+    }
+  }
+
+  // Termine und Aufgaben gemischt, nach Datum sortiert (Termine vor Aufgaben am selben Tag)
+  function fillMixed(ul, items, emptyText, onChange) {
+    ul.replaceChildren();
+    if (!items.length) { ul.append(el("li", { className: "empty", textContent: emptyText })); return; }
+    items.sort((a, b) => a.sortDate.localeCompare(b.sortDate) || (a.kind === "event" ? 0 : 1) - (b.kind === "event" ? 0 : 1));
+    for (const it of items) {
+      ul.append(it.kind === "event"
+        ? eventItem(it.data, it.day, onChange)
+        : taskRow(it.data, { showList: true, onToggle: (t, li) => toggleTask(t, li, onChange) }));
+    }
+  }
+
+  // ---------- Heute ----------
+  async function renderToday() {
+    const now = new Date();
+    const h = now.getHours();
+    const todayKey = iso(now);
+    const weekKey = iso(addDays(now, 7));
+    $("today-greeting").textContent = h < 11 ? "Guten Morgen" : h < 18 ? "Hallo" : "Guten Abend";
+    $("today-date").textContent = longDate(todayKey);
+    $("whoami").textContent = store.get("user", "") ? `Angemeldet als ${store.get("user", "")}` : "";
+    renderWeather();
+    try {
+      const [evs, todos, classes] = await Promise.all([api(`/api/events?from=${todayKey}&to=${weekKey}`), api("/api/todos"), api("/api/timetable")]);
+      renderTodayClasses(classes);
+      const open = todos.filter((t) => !t.done);
+      $("tile-tasks-sub").textContent = open.length ? `${open.length} offen` : "alles erledigt";
+      const dated = open.filter((t) => t.due_date);
+      const todayItems = [
+        ...evs.filter((e) => covers(e, todayKey)).map((e) => ({ kind: "event", data: e, day: todayKey, sortDate: todayKey })),
+        ...dated.filter((t) => t.due_date <= todayKey).map((t) => ({ kind: "task", data: t, sortDate: t.due_date })),
+      ];
+      const upcomingItems = [
+        ...evs.filter((e) => e.start_date > todayKey).map((e) => ({ kind: "event", data: e, day: e.start_date, sortDate: e.start_date })),
+        ...dated.filter((t) => t.due_date > todayKey && t.due_date <= weekKey).map((t) => ({ kind: "task", data: t, sortDate: t.due_date })),
+      ];
+      fillMixed($("today-events"), todayItems, "Heute nichts geplant.", renderToday);
+      fillMixed($("upcoming-events"), upcomingItems, "Keine weiteren Termine oder Aufgaben.", renderToday);
+    } catch (e) {
+      if (token) $("today-events").replaceChildren(el("li", { className: "empty", textContent: e.message }));
+    }
+  }
+
+  async function checkHealth() {
+    try {
+      const h = await api("/api/health");
+      $("status-line").textContent = (h.llm_configured ? `Assistent bereit (${h.model})` : "Assistent nicht aktiv: GEMINI_API_KEY fehlt.") + ` · Speicher: ${h.storage === "SupabaseStore" ? "Supabase" : "lokal"}`;
+    } catch { $("status-line").textContent = "Server nicht erreichbar."; }
+  }
+
+  // ---------- Wetter (Open-Meteo, kostenlos, ohne Key) ----------
+  const W_MIN = 0, W_MAX = 22, W_STEP = 2;
+  // Bewusst nicht gespeichert: bei jedem Öffnen startet der Bereich wieder bei 8–16 Uhr
+  let wRange = { from: 8, to: 16 };
+  const DEFAULT_LOC = { name: "Berlin", lat: 52.52, lon: 13.405 };
+  const getLoc = () => store.get("loc", DEFAULT_LOC);
+  let wDay = 0;
+  let wCache = null; // { key, at, hourly }
+
+  // Nachts (is_day = 0 von Open-Meteo, abhängig von Sonnenauf- und -untergang) Mond statt Sonne
+  const wIcon = (c, day = true) =>
+    c === 0 ? (day ? "☀️" : "🌙") : c === 1 ? (day ? "🌤️" : "🌙") : c === 2 ? (day ? "⛅" : "☁️") : c === 3 ? "☁️" :
+    c <= 48 ? "🌫️" : c <= 57 ? "🌦️" : c <= 67 ? "🌧️" : c <= 77 ? "🌨️" : c <= 82 ? "🌧️" : c <= 86 ? "🌨️" : "⛈️";
+
+  async function loadWeather() {
+    const loc = getLoc();
+    const key = `${loc.lat},${loc.lon}`;
+    if (wCache && wCache.key === key && Date.now() - wCache.at < 30 * 60 * 1000) return wCache.hourly;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}&hourly=temperature_2m,weather_code,is_day&timezone=auto&forecast_days=3`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Wetterdienst nicht erreichbar.");
+    const data = await res.json();
+    const hourly = {};
+    data.hourly.time.forEach((t, i) => { hourly[t] = { temp: data.hourly.temperature_2m[i], code: data.hourly.weather_code[i], day: data.hourly.is_day[i] === 1 }; });
+    wCache = { key, at: Date.now(), hourly };
+    return hourly;
+  }
+
+  async function renderWeather() {
+    const box = $("weather");
+    $("loc-name").textContent = getLoc().name;
+    let hourly;
+    try { hourly = await loadWeather(); } catch (e) {
+      box.replaceChildren(el("p", { className: "w-empty", textContent: e.message }));
+      return;
+    }
+    const day = iso(addDays(new Date(), wDay));
+    box.replaceChildren();
+    box.append(weatherCtrl(
+      { label: "Frühere Uhrzeit hinzufügen", disabled: wRange.from <= W_MIN, onClick: () => { wRange.from -= W_STEP; saveRange(); } },
+      { label: "Früheste Uhrzeit entfernen", disabled: wRange.from >= wRange.to, onClick: () => { wRange.from += W_STEP; saveRange(); } },
+    ));
+    for (let h = wRange.from; h <= wRange.to; h += W_STEP) {
+      const w = hourly[`${day}T${pad(h)}:00`];
+      box.append(el("div", { className: "w-slot" + (w && !w.day ? " night" : "") },
+        el("span", { className: "t", textContent: `${pad(h)} Uhr` }),
+        el("span", { className: "i", textContent: w ? wIcon(w.code, w.day) : "–" }),
+        el("span", { className: "d", textContent: w ? `${Math.round(w.temp)}°` : "–" })));
+    }
+    box.append(weatherCtrl(
+      { label: "Spätere Uhrzeit hinzufügen", disabled: wRange.to >= W_MAX, onClick: () => { wRange.to += W_STEP; saveRange(); } },
+      { label: "Späteste Uhrzeit entfernen", disabled: wRange.to <= wRange.from, onClick: () => { wRange.to -= W_STEP; saveRange(); } },
+    ));
+    $("w-msg").textContent = "";
+  }
+
+  // Zwei Knöpfe am Rand: + fügt eine Uhrzeit hinzu, − entfernt die äußerste
+  function weatherCtrl(add, remove) {
+    const mk = (cfg, cls, text) => {
+      const b = el("button", { type: "button", className: cls, textContent: text, ariaLabel: cfg.label, title: cfg.label, disabled: cfg.disabled });
+      b.addEventListener("click", cfg.onClick);
+      return b;
+    };
+    return el("div", { className: "w-ctrl" }, mk(add, "plus", "+"), mk(remove, "minus", "−"));
+  }
+  function saveRange() { renderWeather(); }
+
+  document.querySelectorAll("[data-wday]").forEach((b) => b.addEventListener("click", () => {
+    wDay = Number(b.dataset.wday);
+    document.querySelectorAll("[data-wday]").forEach((x) => x.classList.toggle("active", x === b));
+    renderWeather();
+  }));
+
+  $("loc-chip").addEventListener("click", () => {
+    const panel = $("loc-panel");
+    panel.hidden = !panel.hidden;
+    $("loc-chip").setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) $("loc-input").focus();
+  });
+
+  $("loc-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = $("loc-input").value.trim();
+    const list = $("loc-results");
+    if (!q) return;
+    list.replaceChildren(el("li", { className: "muted", textContent: "Suche …" }));
+    try {
+      const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=de`);
+      const data = await res.json();
+      list.replaceChildren();
+      if (!data.results || !data.results.length) { list.append(el("li", { className: "muted", textContent: "Nichts gefunden." })); return; }
+      for (const r of data.results) {
+        const label = [r.name, r.admin1, r.country].filter(Boolean).join(", ");
+        const b = el("button", { type: "button", textContent: label });
+        b.addEventListener("click", () => {
+          store.set("loc", { name: r.name, lat: r.latitude, lon: r.longitude });
+          wCache = null; list.replaceChildren(); $("loc-input").value = "";
+          $("loc-panel").hidden = true; $("loc-chip").setAttribute("aria-expanded", "false");
+          renderWeather();
+        });
+        list.append(el("li", {}, b));
+      }
+    } catch { list.replaceChildren(el("li", { className: "muted", textContent: "Ortssuche nicht erreichbar." })); }
+  });
+
+  // ---------- Kalender ----------
+  const state = { year: 0, month: 0, selected: "", events: [], todos: [] };
+  { const t = new Date(); state.year = t.getFullYear(); state.month = t.getMonth(); state.selected = iso(t); }
+
+  function gridRange() {
+    const first = new Date(state.year, state.month, 1);
+    const start = addDays(first, -((first.getDay() + 6) % 7)); // Montag = 0
+    return { start, end: addDays(start, 41) }; // 6 Wochen
+  }
+
+  async function loadMonth() {
+    const { start, end } = gridRange();
+    try {
+      [state.events, state.todos] = await Promise.all([
+        api(`/api/events?from=${iso(start)}&to=${iso(end)}`),
+        api(`/api/todos?due_from=${iso(start)}&due_to=${iso(end)}`),
+      ]);
+    } catch { state.events = []; state.todos = []; }
+    renderCalendar();
+  }
+
+  function renderCalendar() {
+    $("cal-title").textContent = `${MONTHS[state.month]} ${state.year}`;
+    const { start } = gridRange();
+    const todayKey = iso(new Date());
+    const grid = $("cal-grid");
+    grid.replaceChildren();
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i);
+      const key = iso(d);
+      const evs = state.events.filter((e) => covers(e, key));
+      const tds = state.todos.filter((t) => t.due_date === key);
+      const cell = el("div", { className: "day", role: "button", tabIndex: 0 });
+      cell.dataset.date = key;
+      if (d.getMonth() !== state.month) cell.classList.add("other");
+      if (key === todayKey) cell.classList.add("today");
+      if (key === state.selected) cell.classList.add("selected");
+      cell.append(el("span", { className: "num", textContent: d.getDate() }));
+      // Termine und offene Aufgaben mit Datum: Tag in der jeweiligen Farbe hinterlegt, Farbbalken und Symbol
+      const marks = [
+        ...evs.map((e) => ({ color: e.color || DEFAULT_COLOR, icon: e.icon || "", task: false })),
+        ...tds.filter((t) => !t.done).map((t) => ({ color: t.list_color || DEFAULT_COLOR, icon: t.list_emoji || "", task: true })),
+      ];
+      if (marks.length) {
+        cell.classList.add("has-ev");
+        cell.style.setProperty("--tint", marks[0].color);
+        const icon = (marks.find((m) => m.icon) || {}).icon;
+        if (icon) cell.append(el("span", { className: "day-icon", textContent: icon }));
+        const bars = el("div", { className: "bars" });
+        for (const m of marks.slice(0, 3)) {
+          const bar = el("span", { className: m.task ? "is-task" : "" });
+          bar.style.setProperty("--c", m.color);
+          bars.append(bar);
+        }
+        cell.append(bars);
+      }
+      grid.append(cell);
+    }
+    renderDay();
+  }
+
+  // Der "Heute"-Knopf erscheint, sobald man einen anderen Monat oder Tag angesehen hat
+  function updateTodayChip() {
+    const t = new Date();
+    $("cal-today").hidden = state.year === t.getFullYear() && state.month === t.getMonth() && state.selected === iso(t);
+  }
+  $("cal-today").addEventListener("click", () => {
+    const t = new Date();
+    state.year = t.getFullYear(); state.month = t.getMonth(); state.selected = iso(t);
+    loadMonth();
+  });
+
+  function renderDay() {
+    updateTodayChip();
+    $("day-title").textContent = longDate(state.selected);
+    const items = [
+      ...state.events.filter((e) => covers(e, state.selected)).map((e) => ({ kind: "event", data: e, day: state.selected, sortDate: state.selected })),
+      ...state.todos.filter((t) => t.due_date === state.selected).map((t) => ({ kind: "task", data: t, sortDate: state.selected })),
+    ];
+    fillMixed($("day-events"), items, "Keine Termine oder Aufgaben.", loadMonth);
+  }
+
+  function selectDate(key) {
+    state.selected = key;
+    const d = parseIso(key);
+    if (d.getMonth() !== state.month || d.getFullYear() !== state.year) {
+      state.month = d.getMonth(); state.year = d.getFullYear(); loadMonth();
+    } else {
+      document.querySelectorAll(".day").forEach((c) => c.classList.toggle("selected", c.dataset.date === key));
+      renderDay();
+    }
+  }
+
+  // Tippen = Tag wählen. Halten = Auswahl startet; ohne Loslassen ziehen = mehrere Tage; Loslassen = Formular.
+  const LONG_PRESS_MS = 250;
+  const WAVE_STEP_MS = 45; // Abstand zwischen den nacheinander eingefärbten Tagen
+  const MOVE_TOLERANCE = 10;
+  const HINT_TEXT = $("cal-hint").textContent;
+  let press = null;
+  let rangeGesture = false; // verhindert, dass das Ziehen als Monats-Wischen zählt
+
+  const grid = $("cal-grid");
+  const cellAt = (x, y) => { const n = document.elementFromPoint(x, y); return n && n.closest ? n.closest(".day") : null; };
+
+  const dayDist = (a, b) => Math.abs(Math.round((parseIso(a) - parseIso(b)) / 86400000));
+
+  function markRange() {
+    const lo = press.anchor < press.end ? press.anchor : press.end;
+    const hi = press.anchor < press.end ? press.end : press.anchor;
+    const fresh = [];
+    grid.querySelectorAll(".day").forEach((c) => {
+      const inside = c.dataset.date >= lo && c.dataset.date <= hi;
+      if (!inside) { c.classList.remove("inrange"); c.style.animationDelay = ""; }
+      else if (!c.classList.contains("inrange")) fresh.push(c);
+    });
+    // Neue Tage laufen vom Startpunkt aus nacheinander ein (Welle), auch über Wochen hinweg
+    fresh.sort((a, b) => dayDist(a.dataset.date, press.anchor) - dayDist(b.dataset.date, press.anchor));
+    fresh.forEach((c, i) => { c.style.animationDelay = `${i * WAVE_STEP_MS}ms`; c.classList.add("inrange"); });
+    const hint = $("cal-hint");
+    hint.classList.add("live");
+    hint.textContent = lo === hi ? longDate(lo) : `${shortDate(lo)} – ${shortDate(hi)} · loslassen zum Anlegen`;
+  }
+
+  function clearPress() {
+    if (!press) return;
+    clearTimeout(press.timer);
+    press.cell.classList.remove("pressing");
+    grid.querySelectorAll(".inrange").forEach((c) => { c.classList.remove("inrange"); c.style.animationDelay = ""; });
+    const hint = $("cal-hint");
+    hint.classList.remove("live");
+    hint.textContent = HINT_TEXT;
+    press = null;
+  }
+
+  grid.addEventListener("contextmenu", (e) => e.preventDefault());
+  grid.addEventListener("pointerdown", (e) => {
+    const cell = e.target.closest(".day");
+    if (!cell || (e.pointerType === "mouse" && e.button !== 0)) return;
+    clearPress();
+    press = { cell, x: e.clientX, y: e.clientY, fired: false, anchor: cell.dataset.date, end: cell.dataset.date };
+    cell.classList.add("pressing");
+    press.timer = setTimeout(() => {
+      press.fired = true;
+      rangeGesture = true;
+      cell.classList.remove("pressing");
+      if (navigator.vibrate) navigator.vibrate(15);
+      markRange();
+    }, LONG_PRESS_MS);
+  });
+
+  grid.addEventListener("pointermove", (e) => {
+    if (!press) return;
+    if (!press.fired) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > MOVE_TOLERANCE) clearPress();
+      return;
+    }
+    const c = cellAt(e.clientX, e.clientY);
+    if (c && c.dataset.date !== press.end) { press.end = c.dataset.date; markRange(); }
+  });
+
+  // Nach dem langen Drücken darf die Seite nicht mitscrollen
+  grid.addEventListener("touchmove", (e) => { if (press && press.fired) e.preventDefault(); }, { passive: false });
+
+  window.addEventListener("pointerup", (e) => {
+    if (!press) return;
+    const { fired, anchor, end } = press;
+    clearPress();
+    if (!fired) { if (e.target.closest && e.target.closest("#cal-grid")) selectDate(anchor); return; }
+    const lo = anchor < end ? anchor : end;
+    const hi = anchor < end ? end : anchor;
+    selectDate(lo);
+    openSheet(lo, hi);
+  });
+  window.addEventListener("pointercancel", clearPress);
+
+  grid.addEventListener("keydown", (e) => {
+    const cell = e.target.closest(".day");
+    if (cell && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); selectDate(cell.dataset.date); }
+  });
+
+  function shiftMonth(delta) {
+    const d = new Date(state.year, state.month + delta, 1);
+    state.year = d.getFullYear(); state.month = d.getMonth();
+    loadMonth();
+  }
+  $("cal-prev").addEventListener("click", () => shiftMonth(-1));
+  $("cal-next").addEventListener("click", () => shiftMonth(1));
+  $("day-add").addEventListener("click", () => openSheet(state.selected, state.selected));
+
+  // Wischen im Kalender wechselt den Monat
+  let swipe = null;
+  $("view-calendar").addEventListener("touchstart", (e) => { rangeGesture = false; swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
+  $("view-calendar").addEventListener("touchend", (e) => {
+    const s = swipe; swipe = null;
+    if (!s || rangeGesture) { rangeGesture = false; return; }
+    const dx = e.changedTouches[0].clientX - s.x;
+    const dy = e.changedTouches[0].clientY - s.y;
+    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2) shiftMonth(dx < 0 ? 1 : -1);
+  }, { passive: true });
+
+  // ---------- Termin-Formular ----------
+  const swatches = $("f-colors");
+  PALETTE.forEach((c, i) => {
+    const input = el("input", { type: "radio", name: "color", value: c, ariaLabel: COLOR_NAMES[i] });
+    const dot = el("span"); dot.style.setProperty("--c", c);
+    swatches.append(el("label", {}, input, dot));
+  });
+
+  const EVENT_ICONS = ["🩺", "🎓", "💼", "🎂", "✈️", "🏋️", "📞", "🍽️", "🚗", "🎉", "🛒", "❤️"];
+  EVENT_ICONS.forEach((em) => {
+    const b = el("button", { type: "button", textContent: em, ariaLabel: `Symbol ${em}` });
+    b.addEventListener("click", () => {
+      $("f-icon").value = $("f-icon").value === em ? "" : em; // zweiter Tipp entfernt das Symbol
+      markIcon();
+    });
+    $("f-quick").append(b);
+  });
+  function markIcon() { $("f-quick").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.textContent === $("f-icon").value.trim())); }
+  $("f-icon").addEventListener("input", markIcon);
+
+  let editingEventId = null;
+  let editFallbackColor = DEFAULT_COLOR; // Farbe, die nicht in der Palette liegt (z. B. vom Assistenten gesetzt)
+
+  function openSheet(startKey, endKey, ev = null) {
+    $("sheet").reset();
+    editingEventId = ev ? ev.id : null;
+    editFallbackColor = ev ? ev.color || DEFAULT_COLOR : DEFAULT_COLOR;
+    $("sheet-title").textContent = ev ? "Termin bearbeiten" : "Neuer Termin";
+    $("f-date").value = startKey;
+    $("f-end-date").value = endKey || startKey;
+    selectColor(swatches, "color", editFallbackColor);
+    if (ev) {
+      $("f-title").value = ev.title;
+      $("f-start").value = ev.start_time || "";
+      $("f-end").value = ev.end_time || "";
+      $("f-note").value = ev.note || "";
+      $("f-icon").value = ev.icon || "";
+    }
+    markIcon();
+    $("f-error").hidden = true;
+    $("sheet-backdrop").hidden = false;
+    $("sheet").hidden = false;
+    setTimeout(() => $("f-title").focus(), 50);
+  }
+  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
+  $("f-cancel").addEventListener("click", closeSheet);
+  $("sheet-backdrop").addEventListener("click", closeSheet);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+  // Liegt "Bis" vor "Von", wird es mitgezogen
+  $("f-date").addEventListener("change", () => { if ($("f-end-date").value < $("f-date").value) $("f-end-date").value = $("f-date").value; });
+
+  $("sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      title: $("f-title").value.trim(),
+      start_date: $("f-date").value,
+      end_date: $("f-end-date").value || $("f-date").value,
+      start_time: $("f-start").value || null,
+      end_time: $("f-end").value || null,
+      color: (swatches.querySelector("input:checked") || {}).value || editFallbackColor,
+      note: $("f-note").value.trim(),
+      icon: $("f-icon").value.trim(),
+    };
+    if (body.end_date < body.start_date) { showFormError("Das Ende liegt vor dem Beginn."); return; }
+    if (body.end_time && !body.start_time) { showFormError("Bitte auch einen Beginn angeben."); return; }
+    if (body.start_date === body.end_date && body.end_time && body.end_time < body.start_time) { showFormError("Die Endzeit liegt vor dem Beginn."); return; }
+    try {
+      if (editingEventId) await api(`/api/events/${editingEventId}`, { method: "PUT", body });
+      else await api("/api/events", { method: "POST", body });
+      closeSheet();
+      state.selected = body.start_date;
+      const d = parseIso(body.start_date);
+      state.year = d.getFullYear(); state.month = d.getMonth();
+      loadMonth();
+      renderToday();
+    } catch (err) { showFormError(err.message); }
+  });
+  function showFormError(msg) { const p = $("f-error"); p.textContent = msg; p.hidden = false; }
+
+  // ---------- Aufgaben ----------
+  const QUICK_EMOJI = ["📝", "🎓", "💼", "🛒", "🏠", "💪", "📚", "✈️", "🎯", "❤️", "🎮", "🍽️"];
+  const todoState = { lists: [], todos: [], openId: null, animateId: null };
+
+  // Wählt eine Farbe aus; liegt sie nicht in der Palette, erscheint sie als zusätzliche Auswahl
+  function selectColor(box, name, color) {
+    box.querySelectorAll("label.custom").forEach((l) => l.remove());
+    const inputs = [...box.querySelectorAll("input")];
+    inputs.forEach((i) => { i.checked = false; });
+    const match = inputs.find((i) => i.value.toLowerCase() === color.toLowerCase());
+    if (match) { match.checked = true; return; }
+    const input = el("input", { type: "radio", name, value: color, ariaLabel: "Eigene Farbe", checked: true });
+    const dot = el("span"); dot.style.setProperty("--c", color);
+    box.append(el("label", { className: "custom" }, input, dot));
+  }
+
+  function buildSwatches(box, name) {
+    PALETTE.forEach((c, i) => {
+      const input = el("input", { type: "radio", name, value: c, ariaLabel: COLOR_NAMES[i] });
+      const dot = el("span"); dot.style.setProperty("--c", c);
+      box.append(el("label", {}, input, dot));
+    });
+  }
+
+  async function loadTodos() {
+    try {
+      [todoState.lists, todoState.todos] = await Promise.all([api("/api/lists"), api("/api/todos")]);
+    } catch (e) { $("list-grid").replaceChildren(el("p", { className: "w-empty", textContent: e.message })); return; }
+    if (todoState.openId && !todoState.lists.some((l) => l.id === todoState.openId)) todoState.openId = null;
+    renderTodos();
+  }
+
+  function renderTodos() {
+    const detail = todoState.openId !== null;
+    $("todo-overview").hidden = detail;
+    $("todo-detail").hidden = !detail;
+    $("task-fab").hidden = !detail;
+    if (detail) renderTodoDetail(); else renderListGrid();
+  }
+
+  function listStats(listId) {
+    const ts = todoState.todos.filter((t) => t.list_id === listId);
+    const done = ts.filter((t) => t.done).length;
+    return { total: ts.length, done, open: ts.length - done };
+  }
+
+  function renderListGrid() {
+    const grid = $("list-grid");
+    grid.replaceChildren();
+    todoState.lists.forEach((l, i) => {
+      const st = listStats(l.id);
+      const card = el("button", { type: "button", className: "list-card" });
+      card.style.setProperty("--c", l.color);
+      card.style.animationDelay = `${i * 50}ms`;
+      const bar = el("div", { className: "mini-bar" }, el("div", { className: "mini-fill" }));
+      bar.firstChild.style.width = st.total ? `${Math.round((st.done / st.total) * 100)}%` : "0%";
+      card.append(
+        el("span", { className: "list-emoji", textContent: l.emoji }),
+        el("b", { textContent: l.name }),
+        el("small", { textContent: st.total === 0 ? "leer" : st.open === 0 ? "alles erledigt" : `${st.open} offen` }),
+        bar,
+      );
+      card.addEventListener("click", () => { todoState.openId = l.id; renderTodos(); window.scrollTo(0, 0); });
+      grid.append(card);
+    });
+    const add = el("button", { type: "button", className: "list-card add", textContent: "＋ Neue Liste" });
+    add.style.animationDelay = `${todoState.lists.length * 50}ms`;
+    add.addEventListener("click", () => openListSheet());
+    grid.append(add);
+    $("list-hint").hidden = todoState.lists.length > 0;
+  }
+
+  function renderTodoDetail(celebrate = false) {
+    const l = todoState.lists.find((x) => x.id === todoState.openId);
+    if (!l) { todoState.openId = null; renderTodos(); return; }
+    $("todo-detail").style.setProperty("--c", l.color);
+    $("task-fab").style.setProperty("--c", l.color); // Schaltfläche in der Farbe der Liste
+    $("td-emoji").textContent = l.emoji;
+    $("td-name").textContent = l.name;
+    const st = listStats(l.id);
+    $("td-bar").style.width = st.total ? `${Math.round((st.done / st.total) * 100)}%` : "0%";
+    $("td-count").textContent = st.total === 0 ? "Noch keine Aufgaben." : st.open === 0 ? "Alles erledigt 🎉" : `${st.done} von ${st.total} erledigt`;
+    if (celebrate && st.total > 0 && st.open === 0) {
+      const em = $("td-emoji");
+      em.classList.remove("celebrate"); void em.offsetWidth; em.classList.add("celebrate");
+    }
+    const ts = todoState.todos.filter((t) => t.list_id === l.id);
+    const mk = (t) => taskRow(t, {
+      enter: t.id === todoState.animateId,
+      onToggle: (task, li) => toggleTask(task, li, (nowDone) => renderTodoDetail(nowDone)),
+      onEdit: (task) => openTaskSheet(task),
+      onDelete: deleteTask,
+    });
+    $("task-open").replaceChildren(...ts.filter((t) => !t.done).map(mk));
+    $("task-done").replaceChildren(...ts.filter((t) => t.done).map(mk));
+    $("done-head").hidden = !ts.some((t) => t.done);
+    $("td-empty").hidden = ts.length > 0;
+    todoState.animateId = null;
+  }
+
+  async function deleteTask(t, li) {
+    li.classList.add("leaving");
+    try {
+      await api(`/api/todos/${t.id}`, { method: "DELETE" });
+      await sleep(250);
+      todoState.todos = todoState.todos.filter((x) => x.id !== t.id);
+      renderTodoDetail();
+    } catch (e) { li.classList.remove("leaving"); alert(e.message); }
+  }
+
+  $("todo-back").addEventListener("click", () => { todoState.openId = null; renderTodos(); });
+
+  $("td-delete").addEventListener("click", async () => {
+    const l = todoState.lists.find((x) => x.id === todoState.openId);
+    if (!l || !confirm(`Liste „${l.name}" mit allen Aufgaben löschen?`)) return;
+    try {
+      await api(`/api/lists/${l.id}`, { method: "DELETE" });
+      todoState.openId = null;
+      await loadTodos();
+    } catch (e) { alert(e.message); }
+  });
+
+  $("clear-done").addEventListener("click", async () => {
+    try {
+      await api(`/api/lists/${todoState.openId}/done`, { method: "DELETE" });
+      await loadTodos();
+    } catch (e) { alert(e.message); }
+  });
+
+  // Neue Aufgabe: Dialog mit klarem „Hinzufügen“-Knopf (Enter auf der Tastatur geht auch)
+  const dateOffset = (n) => iso(addDays(new Date(), n));
+  function markChips() {
+    const v = $("t-date").value;
+    $("t-chips").querySelectorAll("button").forEach((b) => {
+      const off = b.dataset.offset;
+      b.classList.toggle("on", off === "" ? !v : v === dateOffset(Number(off)));
+    });
+  }
+  $("t-chips").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    $("t-date").value = b.dataset.offset === "" ? "" : dateOffset(Number(b.dataset.offset));
+    markChips();
+  }));
+  $("t-date").addEventListener("change", markChips);
+
+  let editingTaskId = null;
+
+  function openTaskSheet(task = null) {
+    $("task-sheet").reset();
+    editingTaskId = task ? task.id : null;
+    $("t-heading").textContent = task ? "Aufgabe bearbeiten" : "Neue Aufgabe";
+    $("t-submit").textContent = task ? "Speichern" : "Hinzufügen";
+    $("t-more").hidden = !!task;
+    if (task) { $("t-title").value = task.title; $("t-date").value = task.due_date || ""; }
+    $("t-error").hidden = true;
+    markChips();
+    $("sheet-backdrop").hidden = false;
+    $("task-sheet").hidden = false;
+    setTimeout(() => $("t-title").focus(), 50);
+  }
+  $("task-fab").addEventListener("click", () => openTaskSheet());
+  $("t-cancel").addEventListener("click", closeSheet);
+
+  async function saveTask(keepOpen) {
+    const title = $("t-title").value.trim();
+    if (!title) { $("t-error").textContent = "Bitte gib einen Titel ein."; $("t-error").hidden = false; $("t-title").focus(); return; }
+    const due = $("t-date").value || null;
+    try {
+      if (editingTaskId) {
+        const row = await api(`/api/todos/${editingTaskId}`, { method: "PATCH", body: { title, due_date: due } });
+        const t = todoState.todos.find((x) => x.id === editingTaskId);
+        if (t) Object.assign(t, row);
+        renderTodoDetail();
+        closeSheet();
+        return;
+      }
+      const row = await api("/api/todos", { method: "POST", body: { list_id: todoState.openId, title, due_date: due } });
+      todoState.todos.push(row);
+      todoState.animateId = row.id;
+      renderTodoDetail();
+      if (keepOpen) {
+        $("t-title").value = "";
+        $("t-error").hidden = true;
+        $("t-title").focus();
+      } else closeSheet();
+    } catch (err) { $("t-error").textContent = err.message; $("t-error").hidden = false; }
+  }
+  $("task-sheet").addEventListener("submit", (e) => { e.preventDefault(); saveTask(false); });
+  $("t-more").addEventListener("click", () => saveTask(true));
+
+  // Neue Liste
+  const listSwatches = $("l-colors");
+  buildSwatches(listSwatches, "lcolor");
+  QUICK_EMOJI.forEach((em) => {
+    const b = el("button", { type: "button", textContent: em, ariaLabel: `Symbol ${em}` });
+    b.addEventListener("click", () => { $("l-emoji").value = em; });
+    $("l-quick").append(b);
+  });
+
+  let editingListId = null;
+  let listFallbackColor = DEFAULT_COLOR;
+
+  function openListSheet(list = null) {
+    $("list-sheet").reset();
+    editingListId = list ? list.id : null;
+    listFallbackColor = list ? list.color || DEFAULT_COLOR : DEFAULT_COLOR;
+    $("l-heading").textContent = list ? "Liste bearbeiten" : "Neue Liste";
+    $("l-submit").textContent = list ? "Speichern" : "Anlegen";
+    $("l-name").value = list ? list.name : "";
+    $("l-emoji").value = list ? list.emoji : "📝";
+    selectColor(listSwatches, "lcolor", listFallbackColor);
+    $("l-error").hidden = true;
+    $("sheet-backdrop").hidden = false;
+    $("list-sheet").hidden = false;
+    setTimeout(() => $("l-name").focus(), 50);
+  }
+  $("l-cancel").addEventListener("click", closeSheet);
+  $("td-edit").addEventListener("click", () => {
+    const l = todoState.lists.find((x) => x.id === todoState.openId);
+    if (l) openListSheet(l);
+  });
+
+  $("list-sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      name: $("l-name").value.trim(),
+      emoji: $("l-emoji").value.trim() || "📝",
+      color: (listSwatches.querySelector("input:checked") || {}).value || listFallbackColor,
+    };
+    try {
+      if (editingListId) {
+        const row = await api(`/api/lists/${editingListId}`, { method: "PATCH", body });
+        const i = todoState.lists.findIndex((x) => x.id === editingListId);
+        if (i >= 0) todoState.lists[i] = row;
+        // Aufgaben tragen Name, Symbol und Farbe der Liste mit
+        todoState.todos.forEach((t) => { if (t.list_id === row.id) { t.list_name = row.name; t.list_emoji = row.emoji; t.list_color = row.color; } });
+        closeSheet();
+        renderTodos();
+        return;
+      }
+      const row = await api("/api/lists", { method: "POST", body });
+      closeSheet();
+      todoState.lists.push(row);
+      todoState.openId = row.id; // neue Liste direkt öffnen
+      renderTodos();
+      window.scrollTo(0, 0);
+    } catch (err) { $("l-error").textContent = err.message; $("l-error").hidden = false; }
+  });
+
+  // Passwort ändern
+  $("pw-open").addEventListener("click", () => {
+    $("pw-sheet").reset();
+    $("pw-error").hidden = true;
+    $("sheet-backdrop").hidden = false;
+    $("pw-sheet").hidden = false;
+    setTimeout(() => $("pw-old").focus(), 50);
+  });
+  $("pw-cancel").addEventListener("click", closeSheet);
+  $("pw-sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const showErr = (m) => { $("pw-error").textContent = m; $("pw-error").hidden = false; };
+    if ($("pw-new").value !== $("pw-new2").value) { showErr("Die neuen Passwörter stimmen nicht überein."); return; }
+    try {
+      await api("/api/auth/password", { method: "POST", body: { old_password: $("pw-old").value, new_password: $("pw-new").value } });
+      closeSheet();
+      $("status-line").textContent = "Passwort geändert.";
+    } catch (err) { showErr(err.message); }
+  });
+
+  function refreshData() { loadMonth(); renderToday(); loadTodos(); }
+
+  // ---------- Stundenplan ----------
+  const DAY_SHORT = ["", "Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+  const DAY_LONG = ["", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
+  const weekdayOf = (d) => ((d.getDay() + 6) % 7) + 1; // Montag = 1 ... Sonntag = 7
+  const planState = { classes: [], day: weekdayOf(new Date()), mode: "day" };
+  let editingClass = null;
+
+  function showToast(msg) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(showToast.timer);
+    showToast.timer = setTimeout(() => { t.hidden = true; }, 4000);
+  }
+
+  async function loadPlan() {
+    try { planState.classes = await api("/api/timetable"); } catch (e) { $("plan-list").replaceChildren(el("li", { className: "empty", textContent: e.message })); return; }
+    renderPlan();
+  }
+
+  const timeRange = (c) => c.start_time + (c.end_time ? `–${c.end_time}` : "");
+
+  function classCard(c, opts = {}) {
+    const li = el("li", { className: "class-card" + (opts.now ? " now" : "") });
+    li.style.setProperty("--c", c.color || DEFAULT_COLOR);
+    const time = el("div", { className: "class-time" }, el("span", { textContent: c.start_time }));
+    if (c.end_time) time.append(el("small", { textContent: c.end_time }));
+    const main = el("div", { className: "class-main" }, el("b", { textContent: (c.icon ? c.icon + " " : "") + c.title }));
+    if (c.room) main.append(el("small", { textContent: `📍 ${c.room}` }));
+    li.append(el("span", { className: "class-bar" }), time, main);
+    if (opts.edit) { main.classList.add("clickable"); main.addEventListener("click", () => openClassSheet(c)); }
+    if (opts.del) {
+      const del = el("button", { className: "event-del", type: "button", textContent: "✕", ariaLabel: "Eintrag löschen" });
+      del.addEventListener("click", () => deleteClass(c));
+      li.append(del);
+    }
+    return li;
+  }
+
+  const isNow = (c) => {
+    if (c.weekday !== weekdayOf(new Date()) || !c.end_time) return false;
+    const n = new Date(); const hm = `${pad(n.getHours())}:${pad(n.getMinutes())}`;
+    return hm >= c.start_time && hm <= c.end_time;
+  };
+
+  function renderPlan() {
+    const byDay = (d) => planState.classes.filter((c) => c.weekday === d);
+    const pills = $("plan-days");
+    pills.hidden = planState.mode === "week";
+    pills.replaceChildren();
+    for (let d = 1; d <= 7; d++) {
+      const n = byDay(d).length;
+      const b = el("button", { type: "button", className: "pill" + (d === planState.day ? " active" : "") + (d === weekdayOf(new Date()) ? " today" : "") },
+        el("span", { textContent: DAY_SHORT[d] }), el("small", { textContent: n ? `${n}×` : "" }));
+      b.addEventListener("click", () => { planState.day = d; renderPlan(); });
+      pills.append(b);
+    }
+    const list = $("plan-list");
+    list.replaceChildren();
+    const opts = (c) => ({ edit: true, del: true, now: isNow(c) });
+    if (planState.mode === "day") {
+      byDay(planState.day).forEach((c, i) => { const li = classCard(c, opts(c)); li.style.animationDelay = `${i * 40}ms`; list.append(li); });
+    } else {
+      for (let d = 1; d <= 7; d++) {
+        const cs = byDay(d);
+        if (!cs.length) continue;
+        list.append(el("li", { className: "week-day", textContent: DAY_LONG[d] }));
+        cs.forEach((c) => list.append(classCard(c, opts(c))));
+      }
+    }
+    const empty = $("plan-empty");
+    const nothing = planState.classes.length === 0;
+    const dayEmpty = planState.mode === "day" && !byDay(planState.day).length;
+    empty.hidden = !(nothing || dayEmpty);
+    empty.textContent = nothing
+      ? "Noch kein Stundenplan. Tippe unten auf „Eintrag“ oder oben auf „Aus Foto“, um ihn aus einem Screenshot zu übernehmen."
+      : `Am ${DAY_LONG[planState.day]} hast du frei.`;
+  }
+
+  document.querySelectorAll("[data-pmode]").forEach((b) => b.addEventListener("click", () => {
+    planState.mode = b.dataset.pmode;
+    document.querySelectorAll("[data-pmode]").forEach((x) => x.classList.toggle("active", x === b));
+    renderPlan();
+  }));
+
+  function renderTodayClasses(classes) {
+    const today = classes.filter((c) => c.weekday === weekdayOf(new Date()));
+    $("today-classes-card").hidden = today.length === 0;
+    $("today-classes").replaceChildren(...today.map((c) => classCard(c, { now: isNow(c) })));
+  }
+
+  // Eintrag anlegen/ändern
+  buildSwatches($("c-colors"), "ccolor");
+
+  function openClassSheet(c = null, preset = {}) {
+    $("class-sheet").reset();
+    editingClass = c;
+    $("c-heading").textContent = c ? "Eintrag bearbeiten" : "Neuer Eintrag";
+    $("c-day").value = String(c ? c.weekday : preset.weekday || planState.day);
+    if (c) { $("c-title").value = c.title; $("c-start").value = c.start_time; $("c-end").value = c.end_time || ""; $("c-room").value = c.room || ""; }
+    selectColor($("c-colors"), "ccolor", c ? c.color || DEFAULT_COLOR : PALETTE[planState.classes.length % PALETTE.length]);
+    $("c-delete").hidden = !c;
+    $("c-error").hidden = true;
+    $("sheet-backdrop").hidden = false;
+    $("class-sheet").hidden = false;
+    setTimeout(() => $("c-title").focus(), 50);
+  }
+  $("plan-fab").addEventListener("click", () => openClassSheet());
+  $("c-cancel").addEventListener("click", closeSheet);
+
+  $("class-sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      title: $("c-title").value.trim(),
+      weekday: Number($("c-day").value),
+      start_time: $("c-start").value,
+      end_time: $("c-end").value || null,
+      room: $("c-room").value.trim(),
+      color: ($("c-colors").querySelector("input:checked") || {}).value || DEFAULT_COLOR,
+      icon: editingClass ? editingClass.icon || "" : "",
+    };
+    if (body.end_time && body.end_time < body.start_time) { $("c-error").textContent = "Die Endzeit liegt vor dem Beginn."; $("c-error").hidden = false; return; }
+    try {
+      if (editingClass) await api(`/api/timetable/${editingClass.id}`, { method: "PUT", body });
+      else await api("/api/timetable", { method: "POST", body });
+      planState.day = body.weekday;
+      closeSheet();
+      loadPlan();
+      renderToday();
+    } catch (err) { $("c-error").textContent = err.message; $("c-error").hidden = false; }
+  });
+
+  $("c-delete").addEventListener("click", () => { if (editingClass) deleteClass(editingClass, true); });
+
+  async function deleteClass(c, fromSheet = false) {
+    if (!confirm(`„${c.title}" (${DAY_LONG[c.weekday]} ${timeRange(c)}) aus dem Stundenplan löschen?`)) return;
+    try {
+      await api(`/api/timetable/${c.id}`, { method: "DELETE" });
+      if (fromSheet) closeSheet();
+      loadPlan();
+      renderToday();
+    } catch (e) { alert(e.message); }
+  }
+
+  // ---------- Bild-Import ----------
+  const IMG_MAX_WIDTH = 1600, SLICE_HEIGHT = 2200, SLICE_OVERLAP = 120, MAX_FILES = 5, MAX_PIECES = 8;
+  let impSession = 0;      // wird beim Schließen erhöht; laufende Analysen werden dann verworfen
+  let impMode = "events";
+  let impFiles = [];
+  let impResult = null;    // { events, classes } nach der Analyse
+
+  const IMP_TEXT = {
+    events: ["Termine aus Bild", "Screenshot oder Foto mit Terminen, z. B. Klausurtermine aus dem Skript. Die KI schlägt Termine für den Kalender vor, du bestätigst."],
+    timetable: ["Stundenplan aus Bild", "Screenshot oder Foto eines Stundenplans. Die KI schlägt die wöchentlichen Veranstaltungen vor, du bestätigst."],
+  };
+  function setImpMode(mode) {
+    impMode = mode;
+    document.querySelectorAll("[data-imode]").forEach((b) => b.classList.toggle("active", b.dataset.imode === mode));
+    $("imp-title").textContent = IMP_TEXT[mode][0];
+    $("imp-lead").textContent = IMP_TEXT[mode][1];
+  }
+  document.querySelectorAll("[data-imode]").forEach((b) => b.addEventListener("click", () => setImpMode(b.dataset.imode)));
+
+  function currentTabName() { const a = document.querySelector(".tabbar button.active"); return a ? a.dataset.tab : "today"; }
+
+  function openImport(mode, files = []) {
+    impSession++;
+    impFiles = [];
+    impResult = null;
+    $("import-sheet").reset();
+    setImpMode(mode || "events");
+    $("imp-mode").hidden = !!mode; // Auswahl nur, wenn das Bild von einer anderen Seite kommt
+    $("imp-select").hidden = false;
+    $("imp-review").hidden = true;
+    $("imp-error").hidden = true;
+    $("imp-status").textContent = "";
+    $("imp-submit").textContent = "Analysieren";
+    $("imp-submit").disabled = true;
+    addImportFiles(files);
+    $("sheet-backdrop").hidden = false;
+    $("import-sheet").hidden = false;
+  }
+  $("plan-import").addEventListener("click", () => openImport("timetable"));
+  $("cal-import").addEventListener("click", () => openImport("events"));
+  $("imp-cancel").addEventListener("click", closeSheet);
+
+  function renderThumbs() {
+    const box = $("imp-thumbs");
+    box.replaceChildren();
+    impFiles.forEach((f, i) => {
+      const img = el("img", { alt: f.name || "Bild", src: URL.createObjectURL(f) });
+      img.onload = () => URL.revokeObjectURL(img.src);
+      const x = el("button", { type: "button", textContent: "✕", ariaLabel: "Bild entfernen" });
+      x.addEventListener("click", () => { impFiles.splice(i, 1); renderThumbs(); });
+      box.append(el("div", { className: "thumb" }, img, x));
+    });
+    $("imp-submit").disabled = impFiles.length === 0;
+  }
+
+  function addImportFiles(files) {
+    const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+    if (!imgs.length) return;
+    impFiles = [...impFiles, ...imgs].slice(0, MAX_FILES);
+    $("imp-error").hidden = true;
+    renderThumbs();
+  }
+  $("imp-file").addEventListener("change", (e) => { addImportFiles(e.target.files); e.target.value = ""; });
+
+  // Ziehen auf die Auswahlfläche, auf die ganze Seite und Einfügen aus der Zwischenablage
+  const dz = $("imp-drop");
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove("drag"); $("drop-overlay").hidden = true; addImportFiles(e.dataTransfer.files); });
+
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+  const appVisible = () => !$("app").hidden;
+  window.addEventListener("dragover", (e) => {
+    if (!appVisible() || !hasFiles(e)) return;
+    e.preventDefault(); // verhindert, dass der Browser das Bild als Seite öffnet
+    if ($("import-sheet").hidden) $("drop-overlay").hidden = false;
+  });
+  window.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("drop-overlay").hidden = true; });
+  window.addEventListener("drop", (e) => {
+    $("drop-overlay").hidden = true;
+    if (!appVisible() || !hasFiles(e)) return;
+    e.preventDefault();
+    if (!$("import-sheet").hidden) { addImportFiles(e.dataTransfer.files); return; }
+    const tab = currentTabName();
+    openImport(tab === "plan" ? "timetable" : tab === "calendar" ? "events" : null, e.dataTransfer.files);
+  });
+  document.addEventListener("paste", (e) => {
+    if (!appVisible() || !e.clipboardData) return;
+    const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    if ($("import-sheet").hidden) { const tab = currentTabName(); openImport(tab === "plan" ? "timetable" : tab === "calendar" ? "events" : null, files); }
+    else addImportFiles(files);
+  });
+
+  // Bild verkleinern (spart Datenmenge und KI-Kosten). Sehr lange Screenshots werden in überlappende Abschnitte geteilt.
+  const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+
+  async function fileToPieces(file) {
+    let bmp;
+    try { bmp = await createImageBitmap(file); } catch { throw new Error(`„${file.name || "Bild"}" kann nicht gelesen werden (Format?). Bitte als JPG oder PNG versuchen.`); }
+    const scale = Math.min(1, IMG_MAX_WIDTH / bmp.width);
+    const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+    const pieces = [];
+    for (let y = 0; y < h; y += SLICE_HEIGHT - SLICE_OVERLAP) {
+      const sh = Math.min(SLICE_HEIGHT, h - y);
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = sh;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, sh);
+      ctx.drawImage(bmp, 0, y / scale, bmp.width, sh / scale, 0, 0, w, sh);
+      const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.88));
+      pieces.push(await blobToBase64(blob));
+      if (y + sh >= h) break;
+    }
+    if (bmp.close) bmp.close();
+    return pieces;
+  }
+
+  const MONTH_SHORT = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+  function eventSummary(ev) {
+    const d = parseIso(ev.start_date);
+    const fmt = (x) => `${WEEKDAYS[x.getDay()].slice(0, 2)}, ${x.getDate()}. ${MONTH_SHORT[x.getMonth()]} ${x.getFullYear()}`;
+    let when = fmt(d);
+    if (ev.end_date && ev.end_date !== ev.start_date) when += ` – ${fmt(parseIso(ev.end_date))}`;
+    if (ev.start_time) when += ` · ${ev.start_time}${ev.end_time ? `–${ev.end_time}` : ""}`;
+    return when + (ev.note ? ` · ${ev.note}` : "") + (ev.past ? " · liegt in der Vergangenheit" : "");
+  }
+
+  function propRow(listEl, title, sub, checked, past) {
+    const input = el("input", { type: "checkbox", checked });
+    const main = el("span", { className: "prop-main" }, el("b", { textContent: title }), el("small", { textContent: sub }));
+    const li = el("li", { className: past ? "past" : "" }, el("label", {}, input, main));
+    input.addEventListener("change", updateCommitButton);
+    listEl.append(li);
+    return input;
+  }
+
+  function updateCommitButton() {
+    const n = [...document.querySelectorAll("#imp-review input:checked")].length;
+    $("imp-submit").textContent = n ? `Übernehmen (${n})` : "Nichts ausgewählt";
+    $("imp-submit").disabled = n === 0;
+  }
+
+  function showReview(result, remarks) {
+    impResult = { events: result.events, classes: result.classes, inputs: { events: [], classes: [] } };
+    $("imp-events").replaceChildren(); $("imp-classes").replaceChildren();
+    result.events.forEach((ev) => impResult.inputs.events.push(propRow($("imp-events"), `${ev.icon ? ev.icon + " " : ""}${ev.title}`, eventSummary(ev), !ev.past, ev.past)));
+    result.classes.forEach((c) => impResult.inputs.classes.push(propRow($("imp-classes"), c.title, `${DAY_LONG[c.weekday]} · ${timeRange(c)}${c.room ? ` · ${c.room}` : ""}`, true, false)));
+    $("imp-events-head").hidden = !result.events.length;
+    $("imp-classes-head").hidden = !result.classes.length;
+    $("imp-remarks").textContent = remarks ? `Hinweis der KI: ${remarks}` : "";
+    $("imp-remarks").hidden = !remarks;
+    $("imp-select").hidden = true;
+    $("imp-review").hidden = false;
+    $("imp-status").textContent = "Prüfe die Vorschläge und wähle ab, was nicht stimmt. Danach kannst du alles noch bearbeiten.";
+    updateCommitButton();
+  }
+
+  async function analyzeImages() {
+    const session = ++impSession;
+    const err = (m) => { $("imp-error").textContent = m; $("imp-error").hidden = false; };
+    $("imp-error").hidden = true;
+    $("imp-submit").disabled = true;
+    try {
+      $("imp-status").textContent = "Bilder werden vorbereitet …";
+      const pieces = [];
+      for (const f of impFiles) pieces.push(...(await fileToPieces(f)));
+      if (pieces.length > MAX_PIECES) throw new Error("Die Bilder sind zu lang oder zu viele. Bitte zuschneiden oder weniger Bilder wählen.");
+      const merged = { events: [], classes: [], remarks: [] };
+      const seen = new Set();
+      for (let i = 0; i < pieces.length; i++) {
+        $("imp-status").textContent = `KI liest Bild ${i + 1} von ${pieces.length} … (das kann bis zu einer Minute dauern)`;
+        const res = await api("/api/import/analyze", { method: "POST", body: { image: pieces[i], mime: "image/jpeg", mode: impMode } });
+        if (session !== impSession) return; // inzwischen geschlossen oder neu gestartet
+        for (const ev of res.events) { const k = `e|${ev.title.toLowerCase()}|${ev.start_date}|${ev.start_time}`; if (!seen.has(k)) { seen.add(k); merged.events.push(ev); } }
+        for (const c of res.classes) { const k = `c|${c.title.toLowerCase()}|${c.weekday}|${c.start_time}`; if (!seen.has(k)) { seen.add(k); merged.classes.push(c); } }
+        if (res.remarks) merged.remarks.push(res.remarks);
+      }
+      if (!merged.events.length && !merged.classes.length) {
+        $("imp-status").textContent = "";
+        err("Es wurden keine Termine oder Stundenplan-Einträge erkannt. Versuche einen anderen Modus oder ein schärferes, näheres Bild.");
+        $("imp-submit").disabled = false;
+        return;
+      }
+      showReview(merged, merged.remarks.join(" "));
+    } catch (e) {
+      if (session !== impSession) return;
+      $("imp-status").textContent = "";
+      err(e.message);
+      $("imp-submit").disabled = impFiles.length === 0;
+    }
+  }
+
+  async function commitImport() {
+    const pick = (items, inputs) => items.filter((_, i) => inputs[i].checked);
+    const events = pick(impResult.events, impResult.inputs.events).map(({ kind, past, ...ev }) => ev); // KI-Hilfsfelder entfernen
+    const classes = pick(impResult.classes, impResult.inputs.classes);
+    $("imp-submit").disabled = true;
+    try {
+      const res = await api("/api/import/commit", { method: "POST", body: { events, classes } });
+      closeSheet();
+      const parts = [];
+      if (res.events) parts.push(`${res.events} Termin${res.events === 1 ? "" : "e"}`);
+      if (res.classes) parts.push(`${res.classes} ${res.classes === 1 ? "Stundenplan-Eintrag" : "Stundenplan-Einträge"}`);
+      showToast(`${parts.join(" und ")} übernommen.`);
+      refreshData();
+      loadPlan();
+    } catch (e) { $("imp-error").textContent = e.message; $("imp-error").hidden = false; $("imp-submit").disabled = false; }
+  }
+
+  $("import-sheet").addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (impResult) commitImport(); else if (impFiles.length) analyzeImages();
+  });
+
+  // ---------- Chat ----------
+  let history = store.get("chat", []);
+  const log = $("chat-log");
+
+  // Die KI schreibt manchmal Markdown (**fett**, * Listen); angezeigt wird reiner Text
+  function plainText(t) {
+    return t
+      .replace(/\*\*(.+?)\*\*/gs, "$1")
+      .replace(/__(.+?)__/gs, "$1")
+      .replace(/`/g, "")
+      .replace(/^[ \t]{0,3}#{1,6}[ \t]*/gm, "")
+      .replace(/^([ \t]*)[*-][ \t]+/gm, "$1• ")
+      .replace(/\*\*/g, "")
+      .trim();
+  }
+
+  function addBubble(role, text, extra = "") {
+    const b = el("div", { className: `msg ${role} ${extra}`.trim(), textContent: role === "assistant" ? plainText(text) : text });
+    log.append(b);
+    scrollChat();
+    return b;
+  }
+  function scrollChat() { log.scrollTop = log.scrollHeight; }
+
+  function renderHistory() {
+    log.replaceChildren();
+    if (!history.length) addBubble("assistant", "Hi! Ich kann deinen Kalender lesen und Termine anlegen. Frag z. B.: „Trag vom 20. bis 22. Oktober Klausurenphase in Rot ein“ oder „Setz Skript drucken auf meine Uni-Liste.“ Bilder mit Terminen kannst du über „📷 Bild“ im Kalender importieren.");
+    history.forEach((m) => addBubble(m.role, m.content));
+  }
+
+  $("chat-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = $("chat-input");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    history.push({ role: "user", content: text });
+    addBubble("user", text);
+    const pending = addBubble("assistant", "…", "pending");
+    $("chat-send").disabled = true;
+    try {
+      const res = await api("/api/chat", { method: "POST", body: { messages: history.slice(-20) } });
+      pending.remove();
+      history.push({ role: "assistant", content: res.reply });
+      addBubble("assistant", res.reply);
+      store.set("chat", history.slice(-40));
+      if ((res.events_created && res.events_created.length) || res.tasks_changed) refreshData();
+    } catch (err) {
+      pending.remove();
+      history.pop(); // fehlgeschlagene Nachricht nicht in den Verlauf übernehmen
+      addBubble("error", err.message);
+    } finally {
+      $("chat-send").disabled = false;
+      input.focus();
+    }
+  });
+
+  // ---------- Start ----------
+  async function startApp() {
+    // Gibt es das Konto serverseitig noch? Sonst wäre die App „angemeldet“, würde aber nichts finden.
+    try {
+      const me = await api("/api/auth/me");
+      store.set("user", me.username);
+    } catch (e) {
+      if (!token) { $("a-error").textContent = e.message; $("a-error").hidden = false; return; } // 401: api() hat bereits abgemeldet
+      // Server nicht erreichbar: App trotzdem zeigen, es erscheinen dann die üblichen Hinweise
+    }
+    $("auth").hidden = true;
+    $("app").hidden = false;
+    $("tabbar").hidden = false;
+    renderHistory();
+    showTab(store.get("tab", "today"));
+    checkHealth();
+  }
+
+  if (token) startApp(); else $("auth").hidden = false;
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+})();
