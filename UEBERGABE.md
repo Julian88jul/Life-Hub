@@ -179,3 +179,27 @@ POST   /api/import/analyze {image (Base64), mime image/jpeg|png|webp, mode auto|
 POST   /api/import/commit  {events:[...], classes:[...]}  → {events: n, classes: n}
 POST   /api/chat           {messages:[{role, content}]}  → {reply, events_created, tasks_changed}
 ```
+
+---
+
+## 11. Arbeiten mit zwei Rechnern (Git)
+
+Repository: <https://github.com/Julian88jul/Life-Hub> (privat). Branch `main`.
+
+**Auf dem anderen Rechner einmalig:**
+
+```powershell
+git clone https://Julian88jul@github.com/Julian88jul/Life-Hub.git "Julian Hub"
+cd "Julian Hub\web\backend"
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+copy .env.example .env      # GEMINI_API_KEY, SECRET_KEY, REGISTRATION_CODE selbst eintragen
+```
+
+Beim ersten Git-Zugriff öffnet sich ein Browserfenster zur GitHub-Anmeldung (mit dem Konto `Julian88jul`).
+
+**Im Alltag:** vor der Arbeit `git pull`, nach der Arbeit `git add -A`, `git commit -m "Was geändert wurde"`, `git push`.
+
+**Nicht im Repository (bewusst):** `web/backend/.env` (Schlüssel), `web/backend/hub.db` (Daten) und `web/backend/backups/`. Sie entstehen auf jedem Rechner lokal; die Datenbank ist pro Rechner getrennt, bis Supabase eingerichtet ist.
+
+**Falls GitHub „Repository not found“ meldet:** Auf diesem Rechner war zuvor ein anderes GitHub-Konto (`rmarkworth`) in Git gespeichert. Der Benutzername in der Adresse (`https://Julian88jul@github.com/...`) sorgt dafür, dass Git sich mit dem richtigen Konto anmeldet.
