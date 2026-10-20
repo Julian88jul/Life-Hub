@@ -540,3 +540,12 @@ button { cursor: pointer; }
 .prop-edit select { flex: none; }
 .prop-edit input[type="time"] { flex: none; }
 #imp-add-class { margin: 4px 0 8px; }
+
+/* ---------- Stundenplan: Lücken zwischen Veranstaltungen ---------- */
+.gap-card {
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin: 0 6px; border-radius: 12px;
+  border: 1px dashed var(--line); color: var(--muted); font-size: 14px; animation: fadeUp .3s ease-out backwards;
+}
+.gap-card.now { border-color: var(--accent); color: var(--accent); }
+.gap-time { min-width: 56px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.class-list.compact .gap-card { border: 0; margin: 0; padding: 6px 0; animation: none; }

@@ -1013,6 +1013,41 @@
     return li;
   }
 
+  // Lücken zwischen zwei Veranstaltungen eines Tages ("frei von 10:00 bis 12:00")
+  const toMin = (hm) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+  const fromMin = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+  const durText = (m) => { const h = Math.floor(m / 60), r = m % 60; return h ? (r ? `${h} Std. ${r} Min.` : `${h} Std.`) : `${r} Min.`; };
+  const GAP_MIN = 20; // kürzere Lücken zeigt der Plan nicht an
+
+  function gapCard(from, to, opts = {}) {
+    const li = el("li", { className: "gap-card" + (opts.now ? " now" : "") });
+    li.append(
+      el("span", { className: "gap-time", textContent: `${from}–${to}` }),
+      el("span", { className: "gap-label", textContent: `frei · ${durText(toMin(to) - toMin(from))}` }));
+    return li;
+  }
+
+  // Liefert die Einträge eines Tages in Reihenfolge, mit {gap: true, from, to} dazwischen
+  function withGaps(cs) {
+    const out = [];
+    let latestEnd = null;
+    for (const c of cs) {
+      if (latestEnd !== null && c.start_time) {
+        const gap = toMin(c.start_time) - latestEnd;
+        if (gap >= GAP_MIN) out.push({ gap: true, from: fromMin(latestEnd), to: c.start_time });
+      }
+      out.push(c);
+      if (c.end_time) latestEnd = Math.max(latestEnd === null ? 0 : latestEnd, toMin(c.end_time));
+      else if (c.start_time) latestEnd = Math.max(latestEnd === null ? 0 : latestEnd, toMin(c.start_time));
+    }
+    return out;
+  }
+
+  const gapIsNow = (g) => {
+    const n = new Date(); const hm = `${pad(n.getHours())}:${pad(n.getMinutes())}`;
+    return hm >= g.from && hm < g.to;
+  };
+
   const isNow = (c) => {
     if (c.weekday !== weekdayOf(new Date()) || !c.end_time) return false;
     const n = new Date(); const hm = `${pad(n.getHours())}:${pad(n.getMinutes())}`;
@@ -1035,13 +1070,17 @@
     list.replaceChildren();
     const opts = (c) => ({ edit: true, now: isNow(c) });
     if (planState.mode === "day") {
-      byDay(planState.day).forEach((c, i) => { const li = classCard(c, opts(c)); li.style.animationDelay = `${i * 40}ms`; list.append(li); });
+      const todayView = planState.day === weekdayOf(new Date());
+      withGaps(byDay(planState.day)).forEach((c, i) => {
+        const li = c.gap ? gapCard(c.from, c.to, { now: todayView && gapIsNow(c) }) : classCard(c, opts(c));
+        li.style.animationDelay = `${i * 40}ms`; list.append(li);
+      });
     } else {
       for (let d = 1; d <= 7; d++) {
         const cs = byDay(d);
         if (!cs.length) continue;
         list.append(el("li", { className: "week-day", textContent: DAY_LONG[d] }));
-        cs.forEach((c) => list.append(classCard(c, opts(c))));
+        withGaps(cs).forEach((c) => list.append(c.gap ? gapCard(c.from, c.to, { now: d === weekdayOf(new Date()) && gapIsNow(c) }) : classCard(c, opts(c))));
       }
     }
     const empty = $("plan-empty");
@@ -1062,7 +1101,7 @@
   function renderTodayClasses(classes) {
     const today = classes.filter((c) => c.weekday === weekdayOf(new Date()));
     $("today-classes-card").hidden = today.length === 0;
-    $("today-classes").replaceChildren(...today.map((c) => classCard(c, { now: isNow(c) })));
+    $("today-classes").replaceChildren(...withGaps(today).map((c) => (c.gap ? gapCard(c.from, c.to, { now: gapIsNow(c) }) : classCard(c, { now: isNow(c) }))));
   }
 
   // Eintrag anlegen/ändern
