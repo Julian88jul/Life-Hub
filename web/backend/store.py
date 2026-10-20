@@ -281,9 +281,13 @@ class SupabaseStore:
     REP = {"Prefer": "return=representation"}
 
     def __init__(self, url: str, service_key: str):
+        service_key = service_key.strip()
+        headers = {"apikey": service_key, "Content-Type": "application/json"}
+        if service_key.startswith("eyJ"):  # alter JWT-Key; neue sb_secret_-Keys gehören nicht in Authorization
+            headers["Authorization"] = f"Bearer {service_key}"
         self.http = httpx.Client(
             base_url=url.rstrip("/") + "/rest/v1",
-            headers={"apikey": service_key, "Authorization": f"Bearer {service_key}", "Content-Type": "application/json"},
+            headers=headers,
             timeout=15,
         )
 
