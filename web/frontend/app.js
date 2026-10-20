@@ -423,7 +423,7 @@
     const { start, end, days } = gridRange();
     const week = state.view === "week";
     $("cal-title").textContent = week ? `${shortDate(iso(start))} – ${shortDate(iso(end))}` : `${MONTHS[state.month]} ${state.year}`;
-    $("cal-mode").textContent = week ? "Monat" : "Woche";
+    document.querySelectorAll("[data-cview]").forEach((b) => b.classList.toggle("active", b.dataset.cview === state.view));
     $("cal-prev").ariaLabel = week ? "Vorherige Woche" : "Vorheriger Monat";
     $("cal-next").ariaLabel = week ? "Nächste Woche" : "Nächster Monat";
     const todayKey = iso(new Date());
@@ -605,13 +605,14 @@
   $("cal-next").addEventListener("click", () => shiftMonth(1));
 
   // Umschalten zwischen Monats- und Wochenansicht (die Auswahl bleibt erhalten)
-  $("cal-mode").addEventListener("click", () => {
-    state.view = state.view === "week" ? "month" : "week";
+  document.querySelectorAll("[data-cview]").forEach((b) => b.addEventListener("click", () => {
+    if (state.view === b.dataset.cview) return;
+    state.view = b.dataset.cview;
     store.set("calview", state.view);
     const d = parseIso(state.selected);
     state.year = d.getFullYear(); state.month = d.getMonth();
     loadMonth();
-  });
+  }));
   $("day-add").addEventListener("click", () => openSheet(state.selected, state.selected));
 
   // Wischen im Kalender wechselt den Monat
@@ -1485,22 +1486,36 @@
 
   // ---------- Start ----------
   async function startApp() {
-    // Gibt es das Konto serverseitig noch? Sonst wäre die App „angemeldet“, würde aber nichts finden.
-    try {
-      const me = await api("/api/auth/me");
-      store.set("user", me.username);
-    } catch (e) {
-      if (!token) { $("a-error").textContent = e.message; $("a-error").hidden = false; return; } // 401: api() hat bereits abgemeldet
-      // Server nicht erreichbar: App trotzdem zeigen, es erscheinen dann die üblichen Hinweise
-    }
+    // Die App erscheint sofort (der Server braucht nach Ruhezeit einige Sekunden zum Aufwachen).
+    // Ob das Konto noch existiert, wird im Hintergrund geprüft.
     $("auth").hidden = true;
     $("app").hidden = false;
     $("tabbar").hidden = false;
     renderHistory();
     showTab(store.get("tab", "today"));
     checkHealth();
+    try {
+      const me = await api("/api/auth/me");
+      store.set("user", me.username);
+    } catch (e) {
+      if (!token) { $("a-error").textContent = e.message; $("a-error").hidden = false; } // 401: api() hat bereits abgemeldet
+    }
   }
 
-  if (token) startApp(); else $("auth").hidden = false;
+  // Beim Öffnen aus dem Home-Bildschirm ist das Netz oft noch nicht bereit: Daten neu laden, sobald die App
+  // wieder sichtbar ist oder das Netz zurück ist (höchstens alle 20 Sekunden).
+  let lastRefresh = Date.now();
+  function refreshIfVisible(force) {
+    if ($("app").hidden || document.visibilityState !== "visible") return;
+    if (!force && Date.now() - lastRefresh < 20000) return;
+    lastRefresh = Date.now();
+    refreshData(); loadPlan(); checkHealth();
+  }
+  document.addEventListener("visibilitychange", () => refreshIfVisible(false));
+  window.addEventListener("online", () => refreshIfVisible(true));
+  window.addEventListener("pageshow", (e) => { if (e.persisted) refreshIfVisible(true); });
+
+  if (API) fetch(API + "/api/health", { mode: "cors" }).catch(() => {}); // Server schon beim Start aufwecken
+  if (token) { startApp(); setTimeout(() => refreshIfVisible(true), 5000); } else $("auth").hidden = false;
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();

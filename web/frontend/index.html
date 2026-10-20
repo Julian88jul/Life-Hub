@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=18">
+  <link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -114,7 +114,10 @@
           <h1 id="cal-title"></h1>
           <div class="cal-chips">
             <button type="button" class="chip" id="cal-today" hidden>Heute</button>
-            <button type="button" class="chip" id="cal-mode">Woche</button>
+            <div class="seg" id="cal-view" role="group" aria-label="Ansicht">
+              <button type="button" data-cview="month" class="active">Monat</button>
+              <button type="button" data-cview="week">Woche</button>
+            </div>
           </div>
         </div>
         <button class="icon-btn" id="cal-next" aria-label="Nächster Monat">›</button>
@@ -348,7 +351,7 @@
     </div>
   </form>
 
-  <script src="config.js?v=18"></script>
-  <script src="app.js?v=18"></script>
+  <script src="config.js?v=19"></script>
+  <script src="app.js?v=19"></script>
 </body>
 </html>
