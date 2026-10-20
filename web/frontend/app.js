@@ -176,6 +176,23 @@
     return { text, overdue };
   }
 
+  // Gedrückt halten (ca. 0,5 s) löst `handler` aus; das anschließende Antippen wird dann verschluckt.
+  // Wer scrollt oder den Finger bewegt, löst nichts aus.
+  function longPress(node, handler, ignore = "") {
+    let timer = null, x = 0, y = 0, fired = false;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    node.addEventListener("pointerdown", (e) => {
+      if ((e.pointerType === "mouse" && e.button !== 0) || (ignore && e.target.closest(ignore))) return;
+      fired = false; x = e.clientX; y = e.clientY;
+      cancel();
+      timer = setTimeout(() => { fired = true; timer = null; if (navigator.vibrate) navigator.vibrate(15); handler(); }, 500);
+    });
+    node.addEventListener("pointermove", (e) => { if (timer && Math.hypot(e.clientX - x, e.clientY - y) > 10) cancel(); });
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) node.addEventListener(ev, cancel);
+    node.addEventListener("click", (e) => { if (fired) { e.stopPropagation(); e.preventDefault(); fired = false; } }, true);
+    node.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+
   function taskRow(t, opts = {}) {
     const li = el("li", { className: "task" + (t.done ? " done" : "") + (opts.enter ? " enter" : "") });
     li.style.setProperty("--c", t.list_color || DEFAULT_COLOR);
@@ -195,6 +212,7 @@
       const del = el("button", { className: "event-del", type: "button", textContent: "✕", ariaLabel: "Aufgabe löschen" });
       del.addEventListener("click", () => opts.onDelete(t, li));
       li.append(del);
+      longPress(li, () => { if (confirm(`„${t.title}" löschen?`)) opts.onDelete(t, li); }, ".check");
     }
     return li;
   }
@@ -375,13 +393,19 @@
   });
 
   // ---------- Kalender ----------
-  const state = { year: 0, month: 0, selected: "", events: [], todos: [] };
+  const state = { year: 0, month: 0, selected: "", events: [], todos: [], view: store.get("calview", "month") === "week" ? "week" : "month" };
   { const t = new Date(); state.year = t.getFullYear(); state.month = t.getMonth(); state.selected = iso(t); }
 
+  const mondayOf = (d) => addDays(d, -((d.getDay() + 6) % 7));
+
   function gridRange() {
+    if (state.view === "week") {
+      const start = mondayOf(parseIso(state.selected));
+      return { start, end: addDays(start, 6), days: 7 };
+    }
     const first = new Date(state.year, state.month, 1);
-    const start = addDays(first, -((first.getDay() + 6) % 7)); // Montag = 0
-    return { start, end: addDays(start, 41) }; // 6 Wochen
+    const start = mondayOf(first);
+    return { start, end: addDays(start, 41), days: 42 }; // 6 Wochen
   }
 
   async function loadMonth() {
@@ -396,19 +420,24 @@
   }
 
   function renderCalendar() {
-    $("cal-title").textContent = `${MONTHS[state.month]} ${state.year}`;
-    const { start } = gridRange();
+    const { start, end, days } = gridRange();
+    const week = state.view === "week";
+    $("cal-title").textContent = week ? `${shortDate(iso(start))} – ${shortDate(iso(end))}` : `${MONTHS[state.month]} ${state.year}`;
+    $("cal-mode").textContent = week ? "Monat" : "Woche";
+    $("cal-prev").ariaLabel = week ? "Vorherige Woche" : "Vorheriger Monat";
+    $("cal-next").ariaLabel = week ? "Nächste Woche" : "Nächster Monat";
     const todayKey = iso(new Date());
     const grid = $("cal-grid");
+    grid.classList.toggle("week", week);
     grid.replaceChildren();
-    for (let i = 0; i < 42; i++) {
+    for (let i = 0; i < days; i++) {
       const d = addDays(start, i);
       const key = iso(d);
       const evs = state.events.filter((e) => covers(e, key));
       const tds = state.todos.filter((t) => t.due_date === key);
       const cell = el("div", { className: "day", role: "button", tabIndex: 0 });
       cell.dataset.date = key;
-      if (d.getMonth() !== state.month) cell.classList.add("other");
+      if (!week && d.getMonth() !== state.month) cell.classList.add("other");
       if (key === todayKey) cell.classList.add("today");
       if (key === state.selected) cell.classList.add("selected");
       cell.append(el("span", { className: "num", textContent: d.getDate() }));
@@ -457,9 +486,17 @@
   }
 
   function selectDate(key) {
+    const before = gridRange();
     state.selected = key;
     const d = parseIso(key);
-    if (d.getMonth() !== state.month || d.getFullYear() !== state.year) {
+    if (state.view === "week") {
+      state.month = d.getMonth(); state.year = d.getFullYear();
+      if (key < iso(before.start) || key > iso(before.end)) loadMonth();
+      else {
+        document.querySelectorAll(".day").forEach((c) => c.classList.toggle("selected", c.dataset.date === key));
+        renderDay();
+      }
+    } else if (d.getMonth() !== state.month || d.getFullYear() !== state.year) {
       state.month = d.getMonth(); state.year = d.getFullYear(); loadMonth();
     } else {
       document.querySelectorAll(".day").forEach((c) => c.classList.toggle("selected", c.dataset.date === key));
@@ -555,12 +592,26 @@
   });
 
   function shiftMonth(delta) {
-    const d = new Date(state.year, state.month + delta, 1);
-    state.year = d.getFullYear(); state.month = d.getMonth();
+    if (state.view === "week") {
+      const d = addDays(parseIso(state.selected), 7 * delta);
+      state.selected = iso(d); state.year = d.getFullYear(); state.month = d.getMonth();
+    } else {
+      const d = new Date(state.year, state.month + delta, 1);
+      state.year = d.getFullYear(); state.month = d.getMonth();
+    }
     loadMonth();
   }
   $("cal-prev").addEventListener("click", () => shiftMonth(-1));
   $("cal-next").addEventListener("click", () => shiftMonth(1));
+
+  // Umschalten zwischen Monats- und Wochenansicht (die Auswahl bleibt erhalten)
+  $("cal-mode").addEventListener("click", () => {
+    state.view = state.view === "week" ? "month" : "week";
+    store.set("calview", state.view);
+    const d = parseIso(state.selected);
+    state.year = d.getFullYear(); state.month = d.getMonth();
+    loadMonth();
+  });
   $("day-add").addEventListener("click", () => openSheet(state.selected, state.selected));
 
   // Wischen im Kalender wechselt den Monat
@@ -953,11 +1004,11 @@
     const main = el("div", { className: "class-main" }, el("b", { textContent: (c.icon ? c.icon + " " : "") + c.title }));
     if (c.room) main.append(el("small", { textContent: `📍 ${c.room}` }));
     li.append(el("span", { className: "class-bar" }), time, main);
-    if (opts.edit) { main.classList.add("clickable"); main.addEventListener("click", () => openClassSheet(c)); }
-    if (opts.del) {
-      const del = el("button", { className: "event-del", type: "button", textContent: "✕", ariaLabel: "Eintrag löschen" });
-      del.addEventListener("click", () => deleteClass(c));
-      li.append(del);
+    if (opts.edit) {
+      // Kein sichtbarer Knopf: Gedrückt halten (oder antippen) öffnet den Eintrag, dort lässt er sich ändern oder löschen
+      main.classList.add("clickable");
+      main.addEventListener("click", () => openClassSheet(c));
+      longPress(li, () => openClassSheet(c));
     }
     return li;
   }
@@ -982,7 +1033,7 @@
     }
     const list = $("plan-list");
     list.replaceChildren();
-    const opts = (c) => ({ edit: true, del: true, now: isNow(c) });
+    const opts = (c) => ({ edit: true, now: isNow(c) });
     if (planState.mode === "day") {
       byDay(planState.day).forEach((c, i) => { const li = classCard(c, opts(c)); li.style.animationDelay = `${i * 40}ms`; list.append(li); });
     } else {
@@ -1216,18 +1267,59 @@
     $("imp-submit").disabled = n === 0;
   }
 
+  // Stundenplan-Vorschlag direkt bearbeitbar: Titel, Tag, Zeiten und Raum; geändert wird das Objekt in impResult.classes
+  function classEditRow(c) {
+    const check = el("input", { type: "checkbox", checked: true, ariaLabel: "Übernehmen" });
+    check.addEventListener("change", updateCommitButton);
+    const title = el("input", { type: "text", value: c.title, placeholder: "Titel", ariaLabel: "Titel", className: "pe-title", maxLength: 120 });
+    title.addEventListener("input", () => { c.title = title.value; });
+    const day = el("select", { ariaLabel: "Wochentag" });
+    for (let d = 1; d <= 7; d++) day.append(el("option", { value: String(d), textContent: DAY_SHORT[d], selected: d === c.weekday }));
+    day.addEventListener("change", () => { c.weekday = Number(day.value); });
+    const start = el("input", { type: "time", value: c.start_time || "", ariaLabel: "Beginn" });
+    start.addEventListener("input", () => { c.start_time = start.value; });
+    const end = el("input", { type: "time", value: c.end_time || "", ariaLabel: "Ende" });
+    end.addEventListener("input", () => { c.end_time = end.value || null; });
+    const room = el("input", { type: "text", value: c.room || "", placeholder: "Raum", ariaLabel: "Raum", className: "pe-room", maxLength: 80 });
+    room.addEventListener("input", () => { c.room = room.value; });
+    const li = el("li", { className: "prop-edit" },
+      el("div", { className: "pe-top" }, check, title),
+      el("div", { className: "pe-row" }, day, start, end, room));
+    return { li, check };
+  }
+
+  function addClassRow(c) {
+    const row = classEditRow(c);
+    $("imp-classes").append(row.li);
+    impResult.classes.push(c);
+    impResult.inputs.classes.push(row.check);
+    return row;
+  }
+
+  $("imp-add-class").addEventListener("click", () => {
+    if (!impResult) return;
+    const row = addClassRow({ title: "", weekday: 1, start_time: "08:00", end_time: "10:00", room: "", color: DEFAULT_COLOR, icon: "" });
+    updateCommitButton();
+    row.li.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.li.querySelector(".pe-title").focus();
+  });
+
   function showReview(result, remarks) {
-    impResult = { events: result.events, classes: result.classes, inputs: { events: [], classes: [] } };
+    impResult = { events: result.events, classes: [], inputs: { events: [], classes: [] } };
     $("imp-events").replaceChildren(); $("imp-classes").replaceChildren();
     result.events.forEach((ev) => impResult.inputs.events.push(propRow($("imp-events"), `${ev.icon ? ev.icon + " " : ""}${ev.title}`, eventSummary(ev), !ev.past, ev.past)));
-    result.classes.forEach((c) => impResult.inputs.classes.push(propRow($("imp-classes"), c.title, `${DAY_LONG[c.weekday]} · ${timeRange(c)}${c.room ? ` · ${c.room}` : ""}`, true, false)));
+    result.classes.forEach((c) => addClassRow(c));
     $("imp-events-head").hidden = !result.events.length;
-    $("imp-classes-head").hidden = !result.classes.length;
+    const showClasses = result.classes.length > 0 || impMode === "timetable";
+    $("imp-classes-head").hidden = !showClasses;
+    $("imp-add-class").hidden = !showClasses;
     $("imp-remarks").textContent = remarks ? `Hinweis der KI: ${remarks}` : "";
     $("imp-remarks").hidden = !remarks;
     $("imp-select").hidden = true;
     $("imp-review").hidden = false;
-    $("imp-status").textContent = "Prüfe die Vorschläge und wähle ab, was nicht stimmt. Danach kannst du alles noch bearbeiten.";
+    $("imp-status").textContent = result.classes.length
+      ? "Prüfe die Vorschläge. Du kannst Titel, Tag, Zeiten und Raum direkt ändern, abwählen oder fehlende Blöcke ergänzen."
+      : "Prüfe die Vorschläge und wähle ab, was nicht stimmt.";
     updateCommitButton();
   }
 
@@ -1269,7 +1361,14 @@
   async function commitImport() {
     const pick = (items, inputs) => items.filter((_, i) => inputs[i].checked);
     const events = pick(impResult.events, impResult.inputs.events).map(({ kind, past, ...ev }) => ev); // KI-Hilfsfelder entfernen
-    const classes = pick(impResult.classes, impResult.inputs.classes);
+    const classes = pick(impResult.classes, impResult.inputs.classes).map((c) => ({ ...c, title: c.title.trim(), room: (c.room || "").trim() }));
+    const bad = classes.find((c) => !c.title || !c.start_time || (c.end_time && c.end_time < c.start_time));
+    if (bad) {
+      $("imp-error").textContent = !bad.title ? "Ein Stundenplan-Eintrag hat keinen Titel." : !bad.start_time ? `„${bad.title}": Beginn fehlt.` : `„${bad.title}": Die Endzeit liegt vor dem Beginn.`;
+      $("imp-error").hidden = false;
+      return;
+    }
+    $("imp-error").hidden = true;
     $("imp-submit").disabled = true;
     try {
       const res = await api("/api/import/commit", { method: "POST", body: { events, classes } });

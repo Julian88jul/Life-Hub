@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=15">
+  <link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -112,7 +112,10 @@
         <button class="icon-btn" id="cal-prev" aria-label="Vorheriger Monat">‹</button>
         <div class="cal-title-wrap">
           <h1 id="cal-title"></h1>
-          <button type="button" class="chip" id="cal-today" hidden>Heute</button>
+          <div class="cal-chips">
+            <button type="button" class="chip" id="cal-today" hidden>Heute</button>
+            <button type="button" class="chip" id="cal-mode">Woche</button>
+          </div>
         </div>
         <button class="icon-btn" id="cal-next" aria-label="Nächster Monat">›</button>
       </header>
@@ -175,6 +178,7 @@
         </header>
         <div class="progress" aria-hidden="true"><div class="bar" id="td-bar"></div></div>
         <p class="muted" id="td-count"></p>
+        <p class="hint" id="td-hint">Aufgabe gedrückt halten zum Löschen, antippen zum Bearbeiten.</p>
         <p class="muted empty-tasks" id="td-empty" hidden>Noch nichts hier. Tippe unten auf „Aufgabe“.</p>
         <ul class="task-list" id="task-open"></ul>
         <div class="row-between done-head" id="done-head" hidden>
@@ -302,6 +306,7 @@
       <ul class="prop-list" id="imp-events"></ul>
       <h3 class="prop-head" id="imp-classes-head">Stundenplan</h3>
       <ul class="prop-list" id="imp-classes"></ul>
+      <button type="button" class="text-btn" id="imp-add-class" hidden>＋ Fehlenden Eintrag ergänzen</button>
       <p class="muted" id="imp-remarks"></p>
     </div>
     <p class="muted" id="imp-status"></p>
@@ -343,7 +348,7 @@
     </div>
   </form>
 
-  <script src="config.js?v=16"></script>
-  <script src="app.js?v=16"></script>
+  <script src="config.js?v=17"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>
