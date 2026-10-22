@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=23">
+  <link rel="stylesheet" href="style.css?v=24">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -127,6 +127,7 @@
         </div>
         <button class="icon-btn" id="cal-next" aria-label="Nächster Monat">›</button>
       </header>
+      <div class="friend-bubbles" id="cal-friends" role="group" aria-label="Kalender von Freunden einblenden" hidden></div>
       <div class="cal-weekdays" aria-hidden="true">
         <span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span>
       </div>
@@ -296,6 +297,7 @@
     <label>Symbol (optional)<input id="f-icon" type="text" maxlength="16" placeholder="z. B. 🩺 für Arzt" autocomplete="off"></label>
     <div class="emoji-quick" id="f-quick" aria-label="Symbol auswählen"></div>
     <label>Notiz<textarea id="f-note" rows="2" maxlength="2000"></textarea></label>
+    <label class="switch-row"><input type="checkbox" id="f-private"><span>🔒 Privat (für Freunde unsichtbar)</span></label>
     <p class="error" id="f-error" hidden></p>
     <div class="actions">
       <button type="button" class="btn ghost" id="f-cancel">Abbrechen</button>
@@ -445,7 +447,7 @@
     <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
   </form>
 
-  <script src="config.js?v=23"></script>
-  <script src="app.js?v=23"></script>
+  <script src="config.js?v=24"></script>
+  <script src="app.js?v=24"></script>
 </body>
 </html>

@@ -144,7 +144,7 @@
   }
 
   function eventItem(ev, day, onChange) {
-    const main = el("div", { className: "event-main" }, el("b", { textContent: (ev.icon ? ev.icon + " " : "") + ev.title }));
+    const main = el("div", { className: "event-main" }, el("b", { textContent: (ev.private ? "🔒 " : "") + (ev.icon ? ev.icon + " " : "") + ev.title }));
     if (ev.start_date !== ev.end_date) main.append(el("small", { textContent: `${shortDate(ev.start_date)} – ${shortDate(ev.end_date)}` }));
     if (ev.note) main.append(el("small", { textContent: ev.note }));
     main.classList.add("clickable");
@@ -422,7 +422,17 @@
         api(`/api/todos?due_from=${iso(start)}&due_to=${iso(end)}`),
       ]);
     } catch { state.events = []; state.todos = []; }
+    state.friendEvents = await loadOverlay(start, end);
     renderCalendar();
+  }
+
+  // Termine der eingeblendeten Freunde; wer nicht mehr teilt, fällt still heraus
+  async function loadOverlay(start, end) {
+    const lists = await Promise.all(activeOverlay().map((f) =>
+      api(`/api/friends/${f.id}/events?from=${iso(start)}&to=${iso(end)}`)
+        .then((evs) => evs.map((e) => ({ ...e, friend: f })))
+        .catch((e) => { if (e.status === 404) loadFriends(); return []; })));
+    return lists.flat();
   }
 
   function renderCalendar() {
@@ -432,12 +442,12 @@
     document.querySelectorAll("[data-cview]").forEach((b) => b.classList.toggle("active", b.dataset.cview === state.view));
     $("cal-prev").ariaLabel = week ? "Vorherige Woche" : "Vorheriger Monat";
     $("cal-next").ariaLabel = week ? "Nächste Woche" : "Nächster Monat";
-    paintGrid($("cal-grid"), { start, days, week, month: state.month, events: state.events, todos: state.todos, selected: state.selected });
+    paintGrid($("cal-grid"), { start, days, week, month: state.month, events: state.events, todos: state.todos, selected: state.selected, friendEvents: state.friendEvents });
     renderDay();
   }
 
   // Zeichnet die Tageszellen eines Kalenders (eigener oder der eines Freundes)
-  function paintGrid(grid, { start, days, week, month, events, todos, selected }) {
+  function paintGrid(grid, { start, days, week, month, events, todos, selected, friendEvents = [] }) {
     const todayKey = iso(new Date());
     grid.classList.toggle("week", week);
     grid.replaceChildren();
@@ -456,15 +466,17 @@
       const marks = [
         ...evs.map((e) => ({ color: e.color || DEFAULT_COLOR, icon: e.icon || "", task: false })),
         ...tds.filter((t) => !t.done).map((t) => ({ color: t.list_color || DEFAULT_COLOR, icon: t.list_emoji || "", task: true })),
+        ...friendEvents.filter((e) => covers(e, key)).map((e) => ({ color: e.color || DEFAULT_COLOR, icon: "", friend: true })),
       ];
       if (marks.length) {
-        cell.classList.add("has-ev");
-        cell.style.setProperty("--tint", marks[0].color);
+        // Farbige Füllung nur für eigene Termine; eingeblendete Freundes-Termine zeigen nur gestrichelte Balken
+        const own = marks.find((m) => !m.friend);
+        if (own) { cell.classList.add("has-ev"); cell.style.setProperty("--tint", own.color); }
         const icon = (marks.find((m) => m.icon) || {}).icon;
         if (icon) cell.append(el("span", { className: "day-icon", textContent: icon }));
         const bars = el("div", { className: "bars" });
         for (const m of marks.slice(0, 3)) {
-          const bar = el("span", { className: m.task ? "is-task" : "" });
+          const bar = el("span", { className: m.task ? "is-task" : m.friend ? "is-friend" : "" });
           bar.style.setProperty("--c", m.color);
           bars.append(bar);
         }
@@ -493,6 +505,11 @@
       ...state.todos.filter((t) => t.due_date === state.selected).map((t) => ({ kind: "task", data: t, sortDate: state.selected })),
     ];
     fillMixed($("day-events"), items, "Keine Termine oder Aufgaben.", loadMonth);
+    const theirs = (state.friendEvents || []).filter((e) => covers(e, state.selected));
+    if (theirs.length) {
+      if (!items.length) $("day-events").replaceChildren();
+      $("day-events").append(...theirs.map((e) => friendEventItem(e, e.friend.username, state.selected, e.friend)));
+    }
   }
 
   function selectDate(key) {
@@ -673,6 +690,7 @@
       $("f-end").value = ev.end_time || "";
       $("f-note").value = ev.note || "";
       $("f-icon").value = ev.icon || "";
+      $("f-private").checked = !!ev.private;
     }
     markIcon();
     $("f-error").hidden = true;
@@ -739,6 +757,7 @@
       color: (swatches.querySelector("input:checked") || {}).value || editFallbackColor,
       note: $("f-note").value.trim(),
       icon: $("f-icon").value.trim(),
+      private: $("f-private").checked,
     };
     if (body.end_date < body.start_date) { showFormError("Das Ende liegt vor dem Beginn."); return; }
     if (body.end_time && !body.start_time) { showFormError("Bitte auch einen Beginn angeben."); return; }
@@ -1497,6 +1516,35 @@
     $("friends-badge").textContent = String(n);
     $("friends-badge").hidden = n === 0;
     if ($("view-friends").classList.contains("active")) renderFriends();
+    const before = JSON.stringify(activeIds);
+    renderFriendBubbles();
+    if ($("view-calendar").classList.contains("active") && JSON.stringify(activeIds) !== before) loadMonth();
+  }
+
+  // Eingeblendet sind nur Freunde, die (noch) ihren Kalender teilen
+  let activeIds = [];
+  const calendarSharers = () => friendsState.friends.filter((f) => f.they_share.calendar);
+  const activeOverlay = () => calendarSharers().filter((f) => store.get("overlay", []).includes(f.id));
+
+  function renderFriendBubbles() {
+    const sharers = calendarSharers();
+    activeIds = activeOverlay().map((f) => f.id);
+    const box = $("cal-friends");
+    box.hidden = sharers.length === 0;
+    box.replaceChildren(...sharers.map((f) => {
+      const on = activeIds.includes(f.id);
+      const b = el("button", { type: "button", className: "bubble" + (on ? " on" : ""), title: f.username, ariaLabel: `${f.username} ${on ? "ausblenden" : "einblenden"}` },
+        el("span", { className: "bubble-dot", textContent: initial(f.username) }), el("small", { textContent: f.username }));
+      b.setAttribute("aria-pressed", String(on));
+      b.style.setProperty("--c", friendColor(f.id));
+      b.addEventListener("click", () => {
+        const ids = activeIds.includes(f.id) ? activeIds.filter((x) => x !== f.id) : [...activeIds, f.id];
+        store.set("overlay", ids); // nicht mehr teilende Freunde fallen dabei heraus
+        renderFriendBubbles();
+        loadMonth();
+      });
+      return b;
+    }));
   }
 
   // Aktion ausführen, Fehler im Freunde-Bereich anzeigen, danach Liste neu laden
@@ -1633,11 +1681,16 @@
     fvRenderDay();
   }
 
-  function friendEventItem(ev, ownerName, day) {
+  function friendEventItem(ev, ownerName, day, badgeFriend = null) {
     const color = el("span", { className: "event-color" });
     color.style.setProperty("--c", ev.color || DEFAULT_COLOR);
     const main = el("div", { className: "event-main clickable" }, el("b", { textContent: (ev.icon ? ev.icon + " " : "") + ev.title }));
-    const li = el("li", { className: "friend-event" }, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main);
+    const li = el("li", { className: "friend-event" + (badgeFriend ? " overlay" : "") }, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main);
+    if (badgeFriend) {
+      const mini = el("span", { className: "friend-mini", textContent: initial(ownerName), title: ownerName });
+      mini.style.setProperty("--c", friendColor(badgeFriend.id));
+      li.append(mini);
+    }
     li.addEventListener("click", () => peekEvent(ev, ownerName));
     return li;
   }
