@@ -1625,7 +1625,7 @@
   });
 
   // ---------- Ansicht eines Freundes (nur lesen) ----------
-  const fv = { friend: null, section: "calendar", view: "month", year: 0, month: 0, selected: "", day: 1, events: [], classes: [] };
+  const fv = { friend: null, section: "calendar", view: "month", planMode: "day", year: 0, month: 0, selected: "", day: 1, events: [], classes: [] };
 
   function openFriend(f) {
     const t = new Date();
@@ -1655,9 +1655,15 @@
   $("friend-back").addEventListener("click", () => showTab("friends"));
 
   // Freundes-Daten holen; teilt der Freund das nicht mehr, zurück zur Freundesliste
+  // Antworten, die erst eintreffen, wenn schon ein anderer Freund oder eine andere Seite offen ist, werden verworfen
+  const fvStale = (f) => fv.friend !== f || !$("view-friend").classList.contains("active");
   async function fvGet(path) {
     const f = fv.friend;
-    try { return await api(`/api/friends/${f.id}${path}`); } catch (e) {
+    try {
+      const data = await api(`/api/friends/${f.id}${path}`);
+      return fvStale(f) ? null : data;
+    } catch (e) {
+      if (fvStale(f)) return null;
       if (e.status === 404) { showToast(`${f.username} teilt das nicht mehr mit dir.`); loadFriends(); showTab("friends"); }
       else showToast(e.message);
       return null;
@@ -1740,11 +1746,20 @@
       b.addEventListener("click", () => { fv.day = d; fvRenderPlan(); });
       return b;
     }));
-    const isToday = fv.day === today;
-    $("fv-plan").replaceChildren(...withGaps(byDay(fv.day)).map((c) => (c.gap ? gapCard(c.from, c.to, { now: isToday && gapIsNow(c) }) : classCard(c, { now: isNow(c) }))));
-    $("fv-plan-empty").textContent = `Am ${DAY_LONG[fv.day]} hat ${fv.friend.username} frei.`;
-    $("fv-plan-empty").hidden = byDay(fv.day).length > 0;
+    const week = fv.planMode === "week";
+    $("fv-days").hidden = week;
+    document.querySelectorAll("[data-fpmode]").forEach((b) => b.classList.toggle("active", b.dataset.fpmode === fv.planMode));
+    const rows = (d) => withGaps(byDay(d)).map((c) => (c.gap ? gapCard(c.from, c.to, { now: d === today && gapIsNow(c) }) : classCard(c, { now: isNow(c) })));
+    const list = $("fv-plan");
+    if (week) {
+      list.replaceChildren();
+      for (let d = 1; d <= 7; d++) if (byDay(d).length) list.append(el("li", { className: "week-day", textContent: DAY_LONG[d] }), ...rows(d));
+    } else list.replaceChildren(...rows(fv.day));
+    const empty = week ? fv.classes.length === 0 : byDay(fv.day).length === 0;
+    $("fv-plan-empty").textContent = week ? `${fv.friend.username} hat keinen Stundenplan eingetragen.` : `Am ${DAY_LONG[fv.day]} hat ${fv.friend.username} frei.`;
+    $("fv-plan-empty").hidden = !empty;
   }
+  document.querySelectorAll("[data-fpmode]").forEach((b) => b.addEventListener("click", () => { fv.planMode = b.dataset.fpmode; fvRenderPlan(); }));
 
   async function fvLoadTodos() {
     const data = await fvGet("/todos");
