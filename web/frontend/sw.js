@@ -1,6 +1,6 @@
 // Minimaler Service Worker: macht die App installierbar und cached nur die Oberfläche.
 // API-Aufrufe gehen immer ans Netz (Mails/Termine sollen nie veraltet angezeigt werden).
-const CACHE = "lifehub-shell-v19";
+const CACHE = "lifehub-shell-v21";
 const SHELL = ["./", "style.css", "app.js", "config.js", "manifest.webmanifest", "icon.svg", "apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

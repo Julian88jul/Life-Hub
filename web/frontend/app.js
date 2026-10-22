@@ -93,18 +93,18 @@
 
   // ---------- Hell / Dunkel ----------
   const THEMES = ["light", "dark"];
-  const systemTheme = () => (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  // Ohne bisherige Wahl gilt zunächst die Einstellung des Geräts; danach zählt nur noch die eigene Wahl
-  function currentTheme() { const t = store.get("theme", null); return THEMES.includes(t) ? t : systemTheme(); }
+  // Ohne bisherige Wahl gilt das dunkle Design; danach zählt nur noch die eigene Wahl
+  function currentTheme() { const t = store.get("theme", null); return THEMES.includes(t) ? t : "dark"; }
   function applyTheme(mode, save = true) {
     document.documentElement.setAttribute("data-theme", mode);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = mode === "dark" ? "#07080d" : "#eceef5";
     if (save) store.set("theme", mode);
     document.querySelectorAll("[data-theme-set]").forEach((b) => b.classList.toggle("active", b.dataset.themeSet === mode));
     $("theme-btn").textContent = mode === "dark" ? "☀️" : "🌙"; // zeigt, wohin der Knopf umschaltet
   }
   document.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => applyTheme(b.dataset.themeSet)));
   $("theme-btn").addEventListener("click", () => applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"));
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!store.get("theme", null)) applyTheme(systemTheme(), false); });
   applyTheme(currentTheme(), false);
 
   // ---------- Tabs ----------
@@ -674,6 +674,47 @@
   $("f-cancel").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+
+  // Fenster am grauen Strich nach unten ziehen = abbrechen (wie bei normalen Handy-Apps)
+  document.querySelectorAll(".sheet").forEach((sheet) => {
+    const grab = sheet.querySelector(".grabber");
+    if (!grab) return;
+    let startY = null, dy = 0, lastY = 0, lastT = 0, vel = 0;
+    const backdrop = $("sheet-backdrop");
+    grab.addEventListener("pointerdown", (e) => {
+      startY = e.clientY; lastY = startY; lastT = e.timeStamp; dy = 0; vel = 0;
+      try { grab.setPointerCapture(e.pointerId); } catch (_) {}
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); // Tastatur zuklappen
+      sheet.classList.remove("settling");
+      sheet.classList.add("dragging");
+    });
+    grab.addEventListener("pointermove", (e) => {
+      if (startY === null) return;
+      dy = Math.max(0, e.clientY - startY); // nur nach unten ziehen
+      const dt = e.timeStamp - lastT;
+      if (dt > 0) vel = (e.clientY - lastY) / dt;
+      lastY = e.clientY; lastT = e.timeStamp;
+      sheet.style.transform = `translateY(${dy}px)`;
+      backdrop.style.opacity = String(Math.max(0, 1 - dy / 320));
+    });
+    const release = () => {
+      if (startY === null) return;
+      startY = null;
+      sheet.classList.remove("dragging");
+      sheet.classList.add("settling");
+      backdrop.style.opacity = "";
+      if (dy > 90 || vel > 0.6) {
+        // weit genug oder schnell genug gezogen: ganz nach unten wegrutschen lassen und schließen
+        sheet.style.transform = "translateY(105%)";
+        setTimeout(() => { closeSheet(); sheet.classList.remove("settling"); sheet.style.transform = ""; }, 190);
+      } else {
+        sheet.style.transform = "";
+        setTimeout(() => sheet.classList.remove("settling"), 220);
+      }
+    };
+    grab.addEventListener("pointerup", release);
+    grab.addEventListener("pointercancel", release);
+  });
   // Liegt "Bis" vor "Von", wird es mitgezogen
   $("f-date").addEventListener("change", () => { if ($("f-end-date").value < $("f-date").value) $("f-end-date").value = $("f-date").value; });
 
