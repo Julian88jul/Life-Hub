@@ -14,6 +14,7 @@ EVENT_FIELDS = ("title", "start_date", "end_date", "start_time", "end_time", "co
 TODO_PATCH_FIELDS = ("done", "title", "due_date")
 LIST_PATCH_FIELDS = ("name", "emoji", "color")
 CLASS_FIELDS = ("title", "weekday", "start_time", "end_time", "room", "color", "icon")
+SHARE_FIELDS = ("calendar", "timetable", "todos")
 
 
 def _event(row) -> dict:
@@ -127,6 +128,24 @@ class SqliteStore:
                     icon TEXT NOT NULL DEFAULT '')"""
             )
             c.execute("CREATE INDEX IF NOT EXISTS idx_timetable_user ON timetable(user_id, weekday, start_time)")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS friendships (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    requester_id INTEGER NOT NULL,
+                    addressee_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    CHECK (requester_id <> addressee_id))"""
+            )
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_friend_pair ON friendships(min(requester_id, addressee_id), max(requester_id, addressee_id))")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS shares (
+                    owner_id INTEGER NOT NULL,
+                    viewer_id INTEGER NOT NULL,
+                    calendar INTEGER NOT NULL DEFAULT 0,
+                    timetable INTEGER NOT NULL DEFAULT 0,
+                    todos INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (owner_id, viewer_id))"""
+            )
 
     # --- Nutzer ---
     def create_user(self, username, password_hash):
@@ -284,6 +303,50 @@ class SqliteStore:
         with self._db() as c:
             return c.execute("DELETE FROM timetable WHERE id=? AND user_id=?", (class_id, user_id)).rowcount > 0
 
+    # --- Freunde ---
+    def get_friendship(self, a, b):
+        with self._db() as c:
+            row = c.execute(
+                "SELECT id,requester_id,addressee_id,status FROM friendships "
+                "WHERE (requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?)",
+                (a, b, b, a),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_friendship(self, requester_id, addressee_id):
+        with self._db() as c:
+            cur = c.execute("INSERT INTO friendships(requester_id,addressee_id) VALUES (?,?)", (requester_id, addressee_id))
+            row = c.execute("SELECT id,requester_id,addressee_id,status FROM friendships WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(row)
+
+    def accept_friendship(self, requester_id, addressee_id):
+        with self._db() as c:
+            c.execute("UPDATE friendships SET status='accepted' WHERE requester_id=? AND addressee_id=?", (requester_id, addressee_id))
+            for owner, viewer in ((requester_id, addressee_id), (addressee_id, requester_id)):
+                c.execute("INSERT OR IGNORE INTO shares(owner_id,viewer_id) VALUES (?,?)", (owner, viewer))
+
+    def delete_friendship(self, a, b):
+        with self._db() as c:
+            n = c.execute(
+                "DELETE FROM friendships WHERE (requester_id=? AND addressee_id=?) OR (requester_id=? AND addressee_id=?)",
+                (a, b, b, a),
+            ).rowcount
+            c.execute("DELETE FROM shares WHERE (owner_id=? AND viewer_id=?) OR (owner_id=? AND viewer_id=?)", (a, b, b, a))
+        return n > 0
+
+    def list_friendships(self, user_id):
+        with self._db() as c:
+            rows = c.execute(
+                "SELECT id,requester_id,addressee_id,status FROM friendships WHERE requester_id=? OR addressee_id=? ORDER BY id",
+                (user_id, user_id),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_share(self, owner_id, viewer_id):
+        with self._db() as c:
+            row = c.execute("SELECT calendar,timetable,todos FROM shares WHERE owner_id=? AND viewer_id=?", (owner_id, viewer_id)).fetchone()
+        return {k: bool(row[k]) if row else False for k in SHARE_FIELDS}
+
 
 class SupabaseStore:
     """Spricht PostgREST mit dem Service-Key an. Der Key darf NUR im Backend liegen."""
@@ -439,6 +502,46 @@ class SupabaseStore:
         r.raise_for_status()
         return len(r.json())
 
+    # --- Freunde ---
+    def _pair(self, a_col, b_col, a, b):
+        return f"(and({a_col}.eq.{a},{b_col}.eq.{b}),and({a_col}.eq.{b},{b_col}.eq.{a}))"
+
+    def get_friendship(self, a, b):
+        rows = self._get("friendships", {"or": self._pair("requester_id", "addressee_id", a, b),
+                                         "select": "id,requester_id,addressee_id,status"})
+        return rows[0] if rows else None
+
+    def create_friendship(self, requester_id, addressee_id):
+        r = self.http.post("/friendships", params={"select": "id,requester_id,addressee_id,status"},
+                           json={"requester_id": requester_id, "addressee_id": addressee_id}, headers=self.REP)
+        r.raise_for_status()
+        return r.json()[0]
+
+    def accept_friendship(self, requester_id, addressee_id):
+        r = self.http.patch("/friendships", params={"requester_id": f"eq.{requester_id}", "addressee_id": f"eq.{addressee_id}"},
+                            json={"status": "accepted"})
+        r.raise_for_status()
+        r = self.http.post("/shares", json=[{"owner_id": requester_id, "viewer_id": addressee_id},
+                                            {"owner_id": addressee_id, "viewer_id": requester_id}],
+                           headers={"Prefer": "resolution=ignore-duplicates"})
+        r.raise_for_status()
+
+    def delete_friendship(self, a, b):
+        r = self.http.delete("/friendships", params={"or": self._pair("requester_id", "addressee_id", a, b)}, headers=self.REP)
+        r.raise_for_status()
+        n = len(r.json())
+        r2 = self.http.delete("/shares", params={"or": self._pair("owner_id", "viewer_id", a, b)})
+        r2.raise_for_status()
+        return n > 0
+
+    def list_friendships(self, user_id):
+        return self._get("friendships", {"or": f"(requester_id.eq.{user_id},addressee_id.eq.{user_id})",
+                                         "select": "id,requester_id,addressee_id,status", "order": "id.asc"})
+
+    def get_share(self, owner_id, viewer_id):
+        rows = self._get("shares", {"owner_id": f"eq.{owner_id}", "viewer_id": f"eq.{viewer_id}", "select": "calendar,timetable,todos"})
+        return {k: bool(rows[0][k]) if rows else False for k in SHARE_FIELDS}
+
 
 def _make():
     url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
@@ -475,3 +578,9 @@ list_classes = _impl.list_classes
 create_class = _impl.create_class
 update_class = _impl.update_class
 delete_class = _impl.delete_class
+get_friendship = _impl.get_friendship
+create_friendship = _impl.create_friendship
+accept_friendship = _impl.accept_friendship
+delete_friendship = _impl.delete_friendship
+list_friendships = _impl.list_friendships
+get_share = _impl.get_share

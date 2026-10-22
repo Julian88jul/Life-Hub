@@ -519,6 +519,76 @@ def import_commit(body: ImportCommitIn, uid: int = Depends(current_user)):
     return {"events": len(events), "classes": len(classes)}
 
 
+# ---------- Freunde ----------
+FRIEND_LIMIT, FRIEND_WINDOW = 20, 3600
+_friend_calls: dict[int, list[float]] = {}
+
+
+class FriendRequestIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+
+
+def _check_friend_rate(uid: int):
+    now = time.time()
+    recent = [t for t in _friend_calls.get(uid, []) if now - t < FRIEND_WINDOW]
+    if len(recent) >= FRIEND_LIMIT:
+        raise HTTPException(429, "Zu viele Anfragen. Bitte später nochmal.")
+    recent.append(now)
+    _friend_calls[uid] = recent
+
+
+@app.get("/api/friends")
+def get_friends(uid: int = Depends(current_user)):
+    out = {"friends": [], "incoming": [], "outgoing": []}
+    for f in store.list_friendships(uid):
+        other = f["addressee_id"] if f["requester_id"] == uid else f["requester_id"]
+        user = store.get_user_by_id(other)
+        if not user:
+            continue
+        if f["status"] == "accepted":
+            out["friends"].append({"id": other, "username": user["username"],
+                                   "they_share": store.get_share(other, uid), "i_share": store.get_share(uid, other)})
+        else:
+            out["outgoing" if f["requester_id"] == uid else "incoming"].append({"id": other, "username": user["username"]})
+    out["friends"].sort(key=lambda x: x["username"])
+    return out
+
+
+@app.post("/api/friends/request", status_code=201)
+def friend_request(body: FriendRequestIn, uid: int = Depends(current_user)):
+    _check_friend_rate(uid)
+    target = store.get_user(body.username.strip().lower())
+    if not target:
+        raise HTTPException(404, "Benutzer nicht gefunden.")
+    if target["id"] == uid:
+        raise HTTPException(400, "Du kannst dich nicht selbst hinzufügen.")
+    f = store.get_friendship(uid, target["id"])
+    if f:
+        # Hat der andere mich schon angefragt, gilt meine Anfrage als Zusage
+        if f["status"] == "pending" and f["addressee_id"] == uid:
+            store.accept_friendship(f["requester_id"], uid)
+            return {"status": "accepted"}
+        raise HTTPException(409, "Ihr seid schon verbunden oder die Anfrage läuft schon.")
+    store.create_friendship(uid, target["id"])
+    return {"status": "pending"}
+
+
+@app.post("/api/friends/{user_id}/accept")
+def friend_accept(user_id: int, uid: int = Depends(current_user)):
+    f = store.get_friendship(uid, user_id)
+    if not f or f["status"] != "pending" or f["requester_id"] != user_id:
+        raise HTTPException(404, "Nicht gefunden.")
+    store.accept_friendship(user_id, uid)
+    return {"status": "accepted"}
+
+
+@app.delete("/api/friends/{user_id}")
+def friend_delete(user_id: int, uid: int = Depends(current_user)):
+    if not store.delete_friendship(uid, user_id):
+        raise HTTPException(404, "Nicht gefunden.")
+    return {"ok": True}
+
+
 # ---------- Chat ----------
 class Msg(BaseModel):
     role: str = Field(pattern="^(user|assistant)$")

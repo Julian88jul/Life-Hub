@@ -108,6 +108,31 @@ with TestClient(main.app) as c:
     check("Fremden Eintrag ändern verboten", c.put(f"/api/timetable/{cid}", json=cl, headers=HO).status_code == 404)
     check("Eintrag löschen", c.delete(f"/api/timetable/{cid}", headers=H).status_code == 200)
 
+    print("Freunde")
+    HC = auth(c.post("/api/auth/register", json={**body, "username": "carl"}).json()["token"])
+    r = c.post("/api/friends/request", json={"username": "BERT"}, headers=H)
+    check("Anfrage per Name (Groß/klein egal)", r.status_code == 201 and r.json()["status"] == "pending")
+    check("Anfrage an sich selbst abgelehnt", c.post("/api/friends/request", json={"username": "anna"}, headers=H).status_code == 400)
+    check("Unbekannter Name", c.post("/api/friends/request", json={"username": "niemand"}, headers=H).status_code == 404)
+    check("Doppelte Anfrage abgelehnt", c.post("/api/friends/request", json={"username": "bert"}, headers=H).status_code == 409)
+    fl = c.get("/api/friends", headers=HO).json()
+    check("Bert sieht Anfrage", [x["username"] for x in fl["incoming"]] == ["anna"])
+    anna_id = fl["incoming"][0]["id"]
+    bert_id = c.get("/api/friends", headers=H).json()["outgoing"][0]["id"]
+    check("Anfragender kann nicht selbst annehmen", c.post(f"/api/friends/{bert_id}/accept", headers=H).status_code == 404)
+    check("Fremder kann nicht annehmen", c.post(f"/api/friends/{anna_id}/accept", headers=HC).status_code == 404)
+    check("Annehmen", c.post(f"/api/friends/{anna_id}/accept", headers=HO).json()["status"] == "accepted")
+    fa = c.get("/api/friends", headers=H).json()
+    off = {"calendar": False, "timetable": False, "todos": False}
+    check("Freund in Liste, Freigaben aus", fa["friends"] == [{"id": bert_id, "username": "bert", "they_share": off, "i_share": off}])
+    check("Keine offenen Anfragen mehr", fa["incoming"] == [] and fa["outgoing"] == [])
+    c.post("/api/friends/request", json={"username": "anna"}, headers=HC)
+    check("Gegenanfrage nimmt sofort an", c.post("/api/friends/request", json={"username": "carl"}, headers=H).json()["status"] == "accepted")
+    check("Entfernen", c.delete(f"/api/friends/{bert_id}", headers=H).status_code == 200)
+    check("Nach Entfernen nicht mehr in Liste", all(x["username"] != "anna" for x in c.get("/api/friends", headers=HO).json()["friends"]))
+    check("Entfernen ohne Freundschaft", c.delete(f"/api/friends/{bert_id}", headers=H).status_code == 404)
+    check("Freunde ohne Login gesperrt", c.get("/api/friends").status_code == 401)
+
     print("Bild-Import (KI-Antwort simuliert)")
     fake = {
         "events": [

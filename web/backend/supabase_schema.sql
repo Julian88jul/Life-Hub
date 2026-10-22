@@ -74,3 +74,24 @@ alter table timetable enable row level security;
 
 -- ---------- Freunde (Update: bei bestehendem Projekt ausführen) ----------
 alter table events add column if not exists private boolean not null default false;
+create table if not exists friendships (
+  id bigint generated always as identity primary key,
+  requester_id bigint not null references users(id) on delete cascade,
+  addressee_id bigint not null references users(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending', 'accepted')),
+  created_at timestamptz not null default now(),
+  check (requester_id <> addressee_id)
+);
+create unique index if not exists uq_friend_pair on friendships (least(requester_id, addressee_id), greatest(requester_id, addressee_id));
+create table if not exists shares (
+  owner_id bigint not null references users(id) on delete cascade,
+  viewer_id bigint not null references users(id) on delete cascade,
+  calendar boolean not null default false,
+  timetable boolean not null default false,
+  todos boolean not null default false,
+  primary key (owner_id, viewer_id)
+);
+alter table friendships enable row level security;
+alter table shares enable row level security;
+grant all on friendships, shares to service_role;
+grant all on all sequences in schema public to service_role;
