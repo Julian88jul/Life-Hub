@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=22">
+  <link rel="stylesheet" href="style.css?v=23">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -218,6 +218,47 @@
       <p class="hint">Freund antippen zum Ansehen. Gedrückt halten oder ⚙️ für das, was er von dir sieht.</p>
     </section>
 
+    <section id="view-friend" class="view" aria-label="Freund">
+      <header class="detail-head">
+        <button type="button" class="icon-btn" id="friend-back" aria-label="Zurück zu den Freunden">‹</button>
+        <div class="detail-title"><span class="friend-avatar" id="fv-avatar"></span><h1 id="fv-name"></h1></div>
+        <span class="head-spacer"></span>
+      </header>
+      <div class="seg full" id="fv-tabs" role="group" aria-label="Bereich">
+        <button type="button" data-fview="calendar">Kalender</button>
+        <button type="button" data-fview="timetable">Stundenplan</button>
+        <button type="button" data-fview="todos">Aufgaben</button>
+      </div>
+      <p class="hint" id="fv-empty" hidden></p>
+      <div id="fv-calendar" hidden>
+        <header class="cal-head">
+          <button class="icon-btn" id="fv-prev" aria-label="Zurück">‹</button>
+          <div class="cal-title-wrap">
+            <h1 id="fv-cal-title"></h1>
+            <div class="seg" role="group" aria-label="Ansicht">
+              <button type="button" data-fcview="month">Monat</button>
+              <button type="button" data-fcview="week">Woche</button>
+            </div>
+          </div>
+          <button class="icon-btn" id="fv-next" aria-label="Weiter">›</button>
+        </header>
+        <div class="cal-weekdays" aria-hidden="true">
+          <span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span>
+        </div>
+        <div id="fv-grid" class="cal-grid"></div>
+        <div class="card fv-day">
+          <h2 id="fv-day-title"></h2>
+          <ul class="event-list" id="fv-day-events"></ul>
+        </div>
+      </div>
+      <div id="fv-timetable" hidden>
+        <div class="day-pills" id="fv-days" role="group" aria-label="Wochentag"></div>
+        <ul class="class-list" id="fv-plan"></ul>
+        <p class="hint" id="fv-plan-empty" hidden></p>
+      </div>
+      <div id="fv-todos" hidden></div>
+    </section>
+
     <section id="view-chat" class="view" aria-label="Assistent">
       <div id="chat-log" class="chat-log" aria-live="polite"></div>
       <form id="chat-form" class="chat-form" autocomplete="off">
@@ -377,6 +418,18 @@
     </div>
   </form>
 
+  <div id="peek-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <p class="eyebrow" id="pk-owner"></p>
+    <h2 id="pk-title"></h2>
+    <p class="muted" id="pk-when"></p>
+    <p class="hint left">„Übernehmen“ legt eine eigene Kopie in deinem Kalender an. Du kannst sie vorher noch anpassen.</p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="pk-close">Schließen</button>
+      <button type="button" class="btn primary" id="pk-take">Übernehmen</button>
+    </div>
+  </div>
+
   <form id="share-sheet" class="sheet" hidden>
     <div class="grabber"></div>
     <h2 id="share-heading">Freigaben</h2>
@@ -392,7 +445,7 @@
     <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
   </form>
 
-  <script src="config.js?v=22"></script>
-  <script src="app.js?v=22"></script>
+  <script src="config.js?v=23"></script>
+  <script src="app.js?v=23"></script>
 </body>
 </html>

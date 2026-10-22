@@ -795,3 +795,9 @@ body::before {
 .sheet .switch-row input { width: 22px; height: 22px; margin: 0; flex: none; accent-color: var(--accent); display: inline-block; }
 .text-btn.danger { color: var(--danger); }
 .friend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.detail-title .friend-avatar { width: 36px; height: 36px; font-size: 15px; }
+#fv-day-title { font-size: 16px; font-weight: 700; letter-spacing: -.01em; text-transform: none; color: var(--text); margin-bottom: 4px; }
+.friend-event { cursor: pointer; }
+#fv-todos .task-list { margin-bottom: 4px; }
+.check:disabled { cursor: default; }
+#peek-sheet h2 { margin: 2px 0 6px; }

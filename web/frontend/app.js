@@ -46,7 +46,11 @@
     } finally { clearTimeout(timer); }
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && token) { logout(false); throw new Error(data.detail || "Bitte neu anmelden."); }
-    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Fehler ${res.status}`);
+    if (!res.ok) {
+      const err = new Error(typeof data.detail === "string" ? data.detail : `Fehler ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
     return data;
   }
 
@@ -200,7 +204,8 @@
     const check = el("button", { type: "button", className: "check", ariaLabel: t.done ? "Als offen markieren" : "Abhaken" });
     check.setAttribute("aria-pressed", String(t.done));
     check.append(checkSvg());
-    check.addEventListener("click", () => opts.onToggle(t, li));
+    if (opts.readOnly) check.disabled = true; // Aufgaben von Freunden: nur ansehen
+    else check.addEventListener("click", () => opts.onToggle(t, li));
     const main = el("div", { className: "task-main" }, el("span", { className: "task-title", textContent: t.title }));
     const due = dueInfo(t);
     const bits = [];
@@ -399,12 +404,12 @@
 
   const mondayOf = (d) => addDays(d, -((d.getDay() + 6) % 7));
 
-  function gridRange() {
-    if (state.view === "week") {
-      const start = mondayOf(parseIso(state.selected));
+  function gridRange(s = state) {
+    if (s.view === "week") {
+      const start = mondayOf(parseIso(s.selected));
       return { start, end: addDays(start, 6), days: 7 };
     }
-    const first = new Date(state.year, state.month, 1);
+    const first = new Date(s.year, s.month, 1);
     const start = mondayOf(first);
     return { start, end: addDays(start, 41), days: 42 }; // 6 Wochen
   }
@@ -427,20 +432,25 @@
     document.querySelectorAll("[data-cview]").forEach((b) => b.classList.toggle("active", b.dataset.cview === state.view));
     $("cal-prev").ariaLabel = week ? "Vorherige Woche" : "Vorheriger Monat";
     $("cal-next").ariaLabel = week ? "Nächste Woche" : "Nächster Monat";
+    paintGrid($("cal-grid"), { start, days, week, month: state.month, events: state.events, todos: state.todos, selected: state.selected });
+    renderDay();
+  }
+
+  // Zeichnet die Tageszellen eines Kalenders (eigener oder der eines Freundes)
+  function paintGrid(grid, { start, days, week, month, events, todos, selected }) {
     const todayKey = iso(new Date());
-    const grid = $("cal-grid");
     grid.classList.toggle("week", week);
     grid.replaceChildren();
     for (let i = 0; i < days; i++) {
       const d = addDays(start, i);
       const key = iso(d);
-      const evs = state.events.filter((e) => covers(e, key));
-      const tds = state.todos.filter((t) => t.due_date === key);
+      const evs = events.filter((e) => covers(e, key));
+      const tds = todos.filter((t) => t.due_date === key);
       const cell = el("div", { className: "day", role: "button", tabIndex: 0 });
       cell.dataset.date = key;
-      if (!week && d.getMonth() !== state.month) cell.classList.add("other");
+      if (!week && d.getMonth() !== month) cell.classList.add("other");
       if (key === todayKey) cell.classList.add("today");
-      if (key === state.selected) cell.classList.add("selected");
+      if (key === selected) cell.classList.add("selected");
       cell.append(el("span", { className: "num", textContent: d.getDate() }));
       // Termine und offene Aufgaben mit Datum: Tag in der jeweiligen Farbe hinterlegt, Farbbalken und Symbol
       const marks = [
@@ -462,7 +472,6 @@
       }
       grid.append(cell);
     }
-    renderDay();
   }
 
   // Der "Heute"-Knopf erscheint, sobald man einen anderen Monat oder Tag angesehen hat
@@ -592,16 +601,16 @@
     if (cell && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); selectDate(cell.dataset.date); }
   });
 
-  function shiftMonth(delta) {
-    if (state.view === "week") {
-      const d = addDays(parseIso(state.selected), 7 * delta);
-      state.selected = iso(d); state.year = d.getFullYear(); state.month = d.getMonth();
+  function shiftState(s, delta) {
+    if (s.view === "week") {
+      const d = addDays(parseIso(s.selected), 7 * delta);
+      s.selected = iso(d); s.year = d.getFullYear(); s.month = d.getMonth();
     } else {
-      const d = new Date(state.year, state.month + delta, 1);
-      state.year = d.getFullYear(); state.month = d.getMonth();
+      const d = new Date(s.year, s.month + delta, 1);
+      s.year = d.getFullYear(); s.month = d.getMonth();
     }
-    loadMonth();
   }
+  function shiftMonth(delta) { shiftState(state, delta); loadMonth(); }
   $("cal-prev").addEventListener("click", () => shiftMonth(-1));
   $("cal-next").addEventListener("click", () => shiftMonth(1));
 
@@ -671,7 +680,7 @@
     $("sheet").hidden = false;
     setTimeout(() => $("f-title").focus(), 50);
   }
-  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
+  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
   $("f-cancel").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
@@ -1567,7 +1576,163 @@
     await friendCall(`/api/friends/${f.id}`, { method: "DELETE" });
   });
 
-  function openFriend(f) { showToast(`Ansicht von ${f.username} folgt.`); } // wird in Task 6 ersetzt
+  // ---------- Ansicht eines Freundes (nur lesen) ----------
+  const fv = { friend: null, section: "calendar", view: "month", year: 0, month: 0, selected: "", day: 1, events: [], classes: [] };
+
+  function openFriend(f) {
+    const t = new Date();
+    Object.assign(fv, { friend: f, view: state.view, year: t.getFullYear(), month: t.getMonth(), selected: iso(t), day: weekdayOf(t), events: [], classes: [] });
+    $("fv-name").textContent = f.username;
+    $("fv-avatar").textContent = initial(f.username);
+    $("fv-avatar").style.setProperty("--c", friendColor(f.id));
+    const avail = SHARE_KEYS.map(([k]) => k).filter((k) => f.they_share[k]);
+    document.querySelectorAll("[data-fview]").forEach((b) => { b.hidden = !avail.includes(b.dataset.fview); });
+    $("fv-tabs").hidden = avail.length < 2;
+    $("fv-empty").textContent = `${f.username} teilt noch nichts mit dir.`;
+    $("fv-empty").hidden = avail.length > 0;
+    for (const s of ["calendar", "timetable", "todos"]) $(`fv-${s}`).hidden = true;
+    showTab("friend");
+    if (avail.length) fvShow(avail.includes(fv.section) ? fv.section : avail[0]);
+  }
+
+  function fvShow(section) {
+    fv.section = section;
+    document.querySelectorAll("[data-fview]").forEach((b) => b.classList.toggle("active", b.dataset.fview === section));
+    for (const s of ["calendar", "timetable", "todos"]) $(`fv-${s}`).hidden = s !== section;
+    if (section === "calendar") fvLoadCal();
+    else if (section === "timetable") fvLoadPlan();
+    else fvLoadTodos();
+  }
+  document.querySelectorAll("[data-fview]").forEach((b) => b.addEventListener("click", () => fvShow(b.dataset.fview)));
+  $("friend-back").addEventListener("click", () => showTab("friends"));
+
+  // Freundes-Daten holen; teilt der Freund das nicht mehr, zurück zur Freundesliste
+  async function fvGet(path) {
+    const f = fv.friend;
+    try { return await api(`/api/friends/${f.id}${path}`); } catch (e) {
+      if (e.status === 404) { showToast(`${f.username} teilt das nicht mehr mit dir.`); loadFriends(); showTab("friends"); }
+      else showToast(e.message);
+      return null;
+    }
+  }
+
+  async function fvLoadCal() {
+    const { start, end } = gridRange(fv);
+    const evs = await fvGet(`/events?from=${iso(start)}&to=${iso(end)}`);
+    if (!evs) return;
+    fv.events = evs;
+    fvRenderCal();
+  }
+
+  function fvRenderCal() {
+    const { start, end, days } = gridRange(fv);
+    const week = fv.view === "week";
+    $("fv-cal-title").textContent = week ? `${shortDate(iso(start))} – ${shortDate(iso(end))}` : `${MONTHS[fv.month]} ${fv.year}`;
+    document.querySelectorAll("[data-fcview]").forEach((b) => b.classList.toggle("active", b.dataset.fcview === fv.view));
+    paintGrid($("fv-grid"), { start, days, week, month: fv.month, events: fv.events, todos: [], selected: fv.selected });
+    fvRenderDay();
+  }
+
+  function friendEventItem(ev, ownerName, day) {
+    const color = el("span", { className: "event-color" });
+    color.style.setProperty("--c", ev.color || DEFAULT_COLOR);
+    const main = el("div", { className: "event-main clickable" }, el("b", { textContent: (ev.icon ? ev.icon + " " : "") + ev.title }));
+    const li = el("li", { className: "friend-event" }, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main);
+    li.addEventListener("click", () => peekEvent(ev, ownerName));
+    return li;
+  }
+
+  function fvRenderDay() {
+    $("fv-day-title").textContent = longDate(fv.selected);
+    const items = fv.events.filter((e) => covers(e, fv.selected));
+    const ul = $("fv-day-events");
+    ul.replaceChildren(...items.map((e) => friendEventItem(e, fv.friend.username, fv.selected)));
+    if (!items.length) ul.append(el("li", { className: "empty", textContent: "Keine Termine." }));
+  }
+
+  $("fv-grid").addEventListener("click", (e) => {
+    const cell = e.target.closest(".day");
+    if (!cell) return;
+    const { start, end } = gridRange(fv);
+    fv.selected = cell.dataset.date;
+    const d = parseIso(fv.selected);
+    if (fv.view === "month" && (d.getMonth() !== fv.month || d.getFullYear() !== fv.year)) { fv.year = d.getFullYear(); fv.month = d.getMonth(); fvLoadCal(); return; }
+    if (fv.selected < iso(start) || fv.selected > iso(end)) { fvLoadCal(); return; }
+    $("fv-grid").querySelectorAll(".day").forEach((c) => c.classList.toggle("selected", c.dataset.date === fv.selected));
+    fvRenderDay();
+  });
+  $("fv-prev").addEventListener("click", () => { shiftState(fv, -1); fvLoadCal(); });
+  $("fv-next").addEventListener("click", () => { shiftState(fv, 1); fvLoadCal(); });
+  document.querySelectorAll("[data-fcview]").forEach((b) => b.addEventListener("click", () => {
+    if (fv.view === b.dataset.fcview) return;
+    fv.view = b.dataset.fcview;
+    const d = parseIso(fv.selected); fv.year = d.getFullYear(); fv.month = d.getMonth();
+    fvLoadCal();
+  }));
+
+  async function fvLoadPlan() {
+    const cs = await fvGet("/timetable");
+    if (!cs) return;
+    fv.classes = cs;
+    fvRenderPlan();
+  }
+
+  function fvRenderPlan() {
+    const byDay = (d) => fv.classes.filter((c) => c.weekday === d);
+    const today = weekdayOf(new Date());
+    $("fv-days").replaceChildren(...[1, 2, 3, 4, 5, 6, 7].map((d) => {
+      const n = byDay(d).length;
+      const b = el("button", { type: "button", className: "pill" + (d === fv.day ? " active" : "") + (d === today ? " today" : "") },
+        el("span", { textContent: DAY_SHORT[d] }), el("small", { textContent: n ? `${n}×` : "" }));
+      b.addEventListener("click", () => { fv.day = d; fvRenderPlan(); });
+      return b;
+    }));
+    const isToday = fv.day === today;
+    $("fv-plan").replaceChildren(...withGaps(byDay(fv.day)).map((c) => (c.gap ? gapCard(c.from, c.to, { now: isToday && gapIsNow(c) }) : classCard(c, { now: isNow(c) }))));
+    $("fv-plan-empty").textContent = `Am ${DAY_LONG[fv.day]} hat ${fv.friend.username} frei.`;
+    $("fv-plan-empty").hidden = byDay(fv.day).length > 0;
+  }
+
+  async function fvLoadTodos() {
+    const data = await fvGet("/todos");
+    if (!data) return;
+    const box = $("fv-todos");
+    box.replaceChildren();
+    if (!data.lists.length) { box.append(el("p", { className: "hint", textContent: `${fv.friend.username} hat noch keine Listen.` })); return; }
+    for (const l of data.lists) {
+      const ts = data.todos.filter((t) => t.list_id === l.id).sort((a, b) => Number(a.done) - Number(b.done));
+      box.append(el("h2", { className: "section-head", textContent: `${l.emoji} ${l.name}` }));
+      const ul = el("ul", { className: "task-list" }, ...ts.map((t) => taskRow(t, { readOnly: true })));
+      ul.style.setProperty("--c", l.color);
+      if (!ts.length) box.append(el("p", { className: "hint left", textContent: "Keine Aufgaben." }));
+      else box.append(ul);
+    }
+  }
+
+  // Vorschau eines Freundes-Termins mit „Übernehmen“
+  let peeked = null;
+  function peekEvent(ev, ownerName) {
+    peeked = ev;
+    $("pk-owner").textContent = `von ${ownerName}`;
+    $("pk-title").textContent = (ev.icon ? ev.icon + " " : "") + ev.title;
+    $("pk-when").textContent = eventSummary(ev);
+    $("sheet-backdrop").hidden = false;
+    $("peek-sheet").hidden = false;
+  }
+  $("pk-close").addEventListener("click", closeSheet);
+  $("pk-take").addEventListener("click", () => { const ev = peeked; closeSheet(); openSheetPrefilled(ev); });
+
+  // Termin-Formular als „Neuer Termin“, vorausgefüllt mit einem fremden Termin (eigene, unabhängige Kopie)
+  function openSheetPrefilled(ev) {
+    openSheet(ev.start_date, ev.end_date);
+    $("f-title").value = ev.title;
+    $("f-start").value = ev.start_time || "";
+    $("f-end").value = ev.end_time || "";
+    $("f-icon").value = ev.icon || "";
+    editFallbackColor = ev.color || DEFAULT_COLOR;
+    selectColor(swatches, "color", editFallbackColor);
+    markIcon();
+  }
 
   $("friends-btn").addEventListener("click", () => showTab("friends"));
   $("friends-back").addEventListener("click", () => showTab("today"));
