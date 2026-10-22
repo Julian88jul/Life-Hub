@@ -10,10 +10,16 @@ from contextlib import contextmanager
 
 import httpx
 
-EVENT_FIELDS = ("title", "start_date", "end_date", "start_time", "end_time", "color", "note", "icon")
+EVENT_FIELDS = ("title", "start_date", "end_date", "start_time", "end_time", "color", "note", "icon", "private")
 TODO_PATCH_FIELDS = ("done", "title", "due_date")
 LIST_PATCH_FIELDS = ("name", "emoji", "color")
 CLASS_FIELDS = ("title", "weekday", "start_time", "end_time", "room", "color", "icon")
+
+
+def _event(row) -> dict:
+    d = dict(row)
+    d["private"] = bool(d["private"])
+    return d
 
 
 def _todo(row) -> dict:
@@ -80,11 +86,15 @@ class SqliteStore:
                     end_time TEXT,
                     color TEXT NOT NULL DEFAULT '#4f46e5',
                     note TEXT NOT NULL DEFAULT '',
-                    icon TEXT NOT NULL DEFAULT '')"""
+                    icon TEXT NOT NULL DEFAULT '',
+                    private INTEGER NOT NULL DEFAULT 0)"""
             )
-            # Bestehende Datenbanken ohne Symbol-Spalte nachrüsten
-            if "icon" not in {r["name"] for r in c.execute("PRAGMA table_info(events)")}:
+            # Bestehende Datenbanken ohne Symbol- bzw. Privat-Spalte nachrüsten
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(events)")}
+            if "icon" not in cols:
                 c.execute("ALTER TABLE events ADD COLUMN icon TEXT NOT NULL DEFAULT ''")
+            if "private" not in cols:
+                c.execute("ALTER TABLE events ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
             c.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, start_date, end_date)")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS todo_lists (
@@ -149,27 +159,27 @@ class SqliteStore:
                 "ORDER BY start_date, COALESCE(start_time,'')",
                 (user_id, date_to, date_from),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [_event(r) for r in rows]
 
     def create_event(self, user_id, ev):
         with self._db() as c:
             cur = c.execute(
-                "INSERT INTO events(user_id,title,start_date,end_date,start_time,end_time,color,note,icon) VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO events(user_id,title,start_date,end_date,start_time,end_time,color,note,icon,private) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (user_id, *(ev[f] for f in EVENT_FIELDS)),
             )
             row = c.execute("SELECT * FROM events WHERE id=?", (cur.lastrowid,)).fetchone()
-        return dict(row)
+        return _event(row)
 
     def update_event(self, user_id, event_id, ev):
         with self._db() as c:
             cur = c.execute(
-                "UPDATE events SET title=?,start_date=?,end_date=?,start_time=?,end_time=?,color=?,note=?,icon=? WHERE id=? AND user_id=?",
+                "UPDATE events SET title=?,start_date=?,end_date=?,start_time=?,end_time=?,color=?,note=?,icon=?,private=? WHERE id=? AND user_id=?",
                 (*(ev[f] for f in EVENT_FIELDS), event_id, user_id),
             )
             if cur.rowcount == 0:
                 return None
             row = c.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
-        return dict(row)
+        return _event(row)
 
     def delete_event(self, user_id, event_id):
         with self._db() as c:

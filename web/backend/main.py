@@ -165,6 +165,7 @@ class EventIn(BaseModel):
     color: str = Field(default=DEFAULT_COLOR, pattern=COLOR_RE)
     note: str = Field(default="", max_length=2000)
     icon: str = Field(default="", max_length=16)  # Emoji als Symbol, z. B. 🩺
+    private: bool = False  # für Freunde unsichtbar
 
     @model_validator(mode="after")
     def check(self):

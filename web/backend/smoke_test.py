@@ -58,6 +58,14 @@ with TestClient(main.app) as c:
     eid = r.json()["id"]
     check("Ungültiges Datum abgelehnt", c.post("/api/events", json={**ev, "start_date": "2026-02-31"}, headers=H).status_code == 422)
     check("Ende vor Beginn abgelehnt", c.post("/api/events", json={**ev, "end_date": "2026-10-01"}, headers=H).status_code == 422)
+    r = c.post("/api/events", json={**ev, "title": "Arzt", "private": True}, headers=H)
+    check("Privaten Termin anlegen", r.status_code == 201 and r.json()["private"] is True)
+    pid = r.json()["id"]
+    r = c.post("/api/events", json=ev, headers=H)
+    check("Standard ist nicht privat", r.json()["private"] is False)
+    check("Privat wieder aus", c.put(f"/api/events/{pid}", json={**ev, "private": False}, headers=H).json()["private"] is False)
+    c.delete(f"/api/events/{pid}", headers=H)
+    c.delete(f"/api/events/{r.json()['id']}", headers=H)
     check("Ungültige Farbe abgelehnt", c.post("/api/events", json={**ev, "color": "rot"}, headers=H).status_code == 422)
     check("Mittlerer Tag liefert Termin", len(c.get("/api/events?from=2026-10-21&to=2026-10-21", headers=H).json()) == 1)
     check("Anderer Nutzer sieht ihn nicht", c.get("/api/events?from=2026-10-21&to=2026-10-21", headers=HO).json() == [])

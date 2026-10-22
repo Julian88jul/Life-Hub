@@ -71,3 +71,6 @@ create table if not exists timetable (
 
 create index if not exists idx_timetable_user on timetable(user_id, weekday, start_time);
 alter table timetable enable row level security;
+
+-- ---------- Freunde (Update: bei bestehendem Projekt ausführen) ----------
+alter table events add column if not exists private boolean not null default false;
