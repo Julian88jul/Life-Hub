@@ -824,3 +824,33 @@ body::before {
   flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff;
   background: var(--c);
 }
+
+/* =====================================================================
+   Ruhiger: weniger Neon und Leuchten (überschreibt die Glow-Effekte oben)
+   ===================================================================== */
+:root {
+  --glow-1: rgba(124, 92, 255, .14);
+  --glow-2: rgba(40, 200, 190, .07);
+  --grad: linear-gradient(135deg, #7c6cf0 0%, #6a8ee8 100%);
+  --accent: #9a8ff0;
+}
+:root[data-theme="light"] {
+  --glow-1: rgba(124, 92, 255, .10);
+  --glow-2: rgba(40, 200, 190, .06);
+  --grad: linear-gradient(135deg, #6152e6 0%, #4f78dc 100%);
+}
+/* Glühen entfernen, nur noch dezente Schatten */
+.btn.primary, .fab, .pill.active, .msg.user, .chat-form button, .auth-card img { box-shadow: 0 3px 10px rgba(0, 0, 0, .22); }
+.fab { box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.event-color, .class-bar, .day .bars span, .list-card::before, .progress .bar, .task.done .check::before { box-shadow: none; }
+.day.today .num { box-shadow: none; }
+.day.selected { box-shadow: 0 0 0 2px var(--accent) inset; }
+.class-card.now { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent); }
+.gap-card.now { box-shadow: none; }
+.tabbar button.active svg { filter: none; }
+.tabbar button.active::after { box-shadow: none; background: var(--accent); }
+.badge { box-shadow: none; }
+.friend-avatar, .bubble.on .bubble-dot { box-shadow: none; }
+.bubble.on .bubble-dot { background: var(--c); border-color: transparent; }
+.eyebrow { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--muted); }
+.list-card::before { background: var(--c); opacity: .8; }
