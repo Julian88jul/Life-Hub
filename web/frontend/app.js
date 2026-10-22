@@ -118,7 +118,8 @@
     if (name === "plan") loadPlan();
     if (name === "todos") loadTodos();
     if (name === "chat") scrollChat();
-    store.set("tab", name);
+    if (name === "friends") { renderFriends(); loadFriends(); }
+    if (!["friends", "friend"].includes(name)) store.set("tab", name); // Freunde-Ansichten nicht als Start-Tab merken
   }
   document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.querySelectorAll("[data-goto]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.goto)));
@@ -670,7 +671,7 @@
     $("sheet").hidden = false;
     setTimeout(() => $("f-title").focus(), 50);
   }
-  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
+  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
   $("f-cancel").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
@@ -1468,6 +1469,109 @@
     if (impResult) commitImport(); else if (impFiles.length) analyzeImages();
   });
 
+  // ---------- Freunde ----------
+  const friendsState = { friends: [], incoming: [], outgoing: [] };
+  let sharingFriend = null;
+  const SHARE_KEYS = [["calendar", "📅"], ["timetable", "🗓️"], ["todos", "✅"]];
+  const friendColor = (id) => PALETTE[id % PALETTE.length];
+  const initial = (name) => (name || "?").charAt(0).toUpperCase();
+
+  function avatar(f) {
+    const a = el("span", { className: "friend-avatar", textContent: initial(f.username) });
+    a.style.setProperty("--c", friendColor(f.id));
+    return a;
+  }
+
+  async function loadFriends() {
+    try { Object.assign(friendsState, await api("/api/friends")); } catch { return; }
+    const n = friendsState.incoming.length;
+    $("friends-badge").textContent = String(n);
+    $("friends-badge").hidden = n === 0;
+    if ($("view-friends").classList.contains("active")) renderFriends();
+  }
+
+  // Aktion ausführen, Fehler im Freunde-Bereich anzeigen, danach Liste neu laden
+  async function friendCall(path, opts) {
+    $("friend-error").hidden = true;
+    try { await api(path, opts); } catch (e) { $("friend-error").textContent = e.message; $("friend-error").hidden = false; }
+    loadFriends();
+  }
+
+  function friendBtn(label, cls, fn) {
+    const b = el("button", { type: "button", className: `btn small ${cls}`, textContent: label });
+    b.addEventListener("click", fn);
+    return b;
+  }
+
+  function renderFriends() {
+    const { friends, incoming, outgoing } = friendsState;
+    $("friends-incoming").replaceChildren(...incoming.map((f) => el("li", { className: "friend-row" },
+      avatar(f), el("b", { className: "friend-name", textContent: f.username }),
+      friendBtn("Ablehnen", "ghost", () => friendCall(`/api/friends/${f.id}`, { method: "DELETE" })),
+      friendBtn("Annehmen", "primary", () => friendCall(`/api/friends/${f.id}/accept`, { method: "POST" })))));
+    $("friends-outgoing").replaceChildren(...outgoing.map((f) => el("li", { className: "friend-row" },
+      avatar(f), el("b", { className: "friend-name", textContent: f.username }),
+      friendBtn("Zurückziehen", "ghost", () => friendCall(`/api/friends/${f.id}`, { method: "DELETE" })))));
+    $("friends-incoming-head").hidden = !incoming.length;
+    $("friends-outgoing-head").hidden = !outgoing.length;
+    $("friends-empty").hidden = friends.length > 0;
+    $("friends-list").replaceChildren(...friends.map((f) => {
+      const icons = el("span", { className: "friend-shares" },
+        ...SHARE_KEYS.map(([k, ic]) => el("span", { className: f.they_share[k] ? "on" : "", textContent: ic, title: f.they_share[k] ? "teilt mit dir" : "teilt nicht" })));
+      const gear = el("button", { type: "button", className: "friend-gear", textContent: "⚙️", ariaLabel: `Freigaben für ${f.username}` });
+      gear.addEventListener("click", (e) => { e.stopPropagation(); openShareSheet(f); });
+      const li = el("li", { className: "friend-row clickable" }, avatar(f),
+        el("span", { className: "friend-main" }, el("b", { className: "friend-name", textContent: f.username }), icons), gear);
+      li.addEventListener("click", () => openFriend(f));
+      longPress(li, () => openShareSheet(f), ".friend-gear");
+      return li;
+    }));
+  }
+
+  $("friend-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = $("friend-name").value.trim();
+    if (!name) return;
+    $("friend-error").hidden = true;
+    try {
+      const r = await api("/api/friends/request", { method: "POST", body: { username: name } });
+      $("friend-name").value = "";
+      showToast(r.status === "accepted" ? `Du bist jetzt mit ${name} befreundet.` : `Anfrage an ${name} gesendet.`);
+    } catch (err) { $("friend-error").textContent = err.message; $("friend-error").hidden = false; }
+    loadFriends();
+  });
+
+  function openShareSheet(f) {
+    sharingFriend = f;
+    $("share-heading").textContent = `Was darf ${f.username} von dir sehen?`;
+    for (const [k] of SHARE_KEYS) $(`sh-${k}`).checked = !!f.i_share[k];
+    $("sh-error").hidden = true;
+    $("sheet-backdrop").hidden = false;
+    $("share-sheet").hidden = false;
+  }
+  $("sh-cancel").addEventListener("click", closeSheet);
+  $("share-sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(SHARE_KEYS.map(([k]) => [k, $(`sh-${k}`).checked]));
+    try {
+      await api(`/api/friends/${sharingFriend.id}/share`, { method: "PUT", body });
+      closeSheet();
+      showToast("Freigaben gespeichert.");
+      loadFriends();
+    } catch (err) { $("sh-error").textContent = err.message; $("sh-error").hidden = false; }
+  });
+  $("sh-remove").addEventListener("click", async () => {
+    const f = sharingFriend;
+    if (!f || !confirm(`${f.username} als Freund entfernen? Ihr seht dann beide nichts mehr voneinander.`)) return;
+    closeSheet();
+    await friendCall(`/api/friends/${f.id}`, { method: "DELETE" });
+  });
+
+  function openFriend(f) { showToast(`Ansicht von ${f.username} folgt.`); } // wird in Task 6 ersetzt
+
+  $("friends-btn").addEventListener("click", () => showTab("friends"));
+  $("friends-back").addEventListener("click", () => showTab("today"));
+
   // ---------- Chat ----------
   let history = store.get("chat", []);
   const log = $("chat-log");
@@ -1534,6 +1638,7 @@
     $("tabbar").hidden = false;
     renderHistory();
     showTab(store.get("tab", "today"));
+    loadFriends();
     checkHealth();
     try {
       const me = await api("/api/auth/me");
@@ -1550,7 +1655,7 @@
     if ($("app").hidden || document.visibilityState !== "visible") return;
     if (!force && Date.now() - lastRefresh < 20000) return;
     lastRefresh = Date.now();
-    refreshData(); loadPlan(); checkHealth();
+    refreshData(); loadPlan(); checkHealth(); loadFriends();
   }
   document.addEventListener("visibilitychange", () => refreshIfVisible(false));
   window.addEventListener("online", () => refreshIfVisible(true));

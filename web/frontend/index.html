@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=21">
+  <link rel="stylesheet" href="style.css?v=22">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -45,6 +45,7 @@
         </div>
         <div class="top-actions">
           <button type="button" class="chip" id="loc-chip" aria-label="Ort ändern" aria-expanded="false">📍 <span id="loc-name">Berlin</span></button>
+          <button type="button" class="icon-btn small friends-btn" id="friends-btn" aria-label="Freunde" title="Freunde"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.8" cy="9.5" r="2.5"/><path d="M15.6 14.2c2.4-.3 4.4 1.3 4.9 4.3"/></svg><span class="badge" id="friends-badge" hidden></span></button>
           <button type="button" class="icon-btn small" id="theme-btn" aria-label="Hell oder dunkel umschalten" title="Hell/Dunkel">🌓</button>
         </div>
       </header>
@@ -194,6 +195,27 @@
         </div>
         <ul class="task-list done" id="task-done"></ul>
       </div>
+    </section>
+
+    <section id="view-friends" class="view" aria-label="Freunde">
+      <header class="detail-head">
+        <button type="button" class="icon-btn" id="friends-back" aria-label="Zurück">‹</button>
+        <div class="detail-title"><h1>Freunde</h1></div>
+        <span class="head-spacer"></span>
+      </header>
+      <form id="friend-form" class="inline-form card">
+        <input id="friend-name" type="text" placeholder="Benutzername" aria-label="Benutzername" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="64" required>
+        <button type="submit" class="btn primary small">Anfrage senden</button>
+      </form>
+      <p class="error" id="friend-error" hidden></p>
+      <h2 class="section-head" id="friends-incoming-head" hidden>Anfragen an dich</h2>
+      <ul class="friend-list" id="friends-incoming"></ul>
+      <h2 class="section-head">Freunde</h2>
+      <ul class="friend-list" id="friends-list"></ul>
+      <p class="hint" id="friends-empty" hidden>Noch keine Freunde. Gib oben den Benutzernamen ein.</p>
+      <h2 class="section-head" id="friends-outgoing-head" hidden>Gesendet</h2>
+      <ul class="friend-list" id="friends-outgoing"></ul>
+      <p class="hint">Freund antippen zum Ansehen. Gedrückt halten oder ⚙️ für das, was er von dir sieht.</p>
     </section>
 
     <section id="view-chat" class="view" aria-label="Assistent">
@@ -355,7 +377,22 @@
     </div>
   </form>
 
-  <script src="config.js?v=21"></script>
-  <script src="app.js?v=21"></script>
+  <form id="share-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2 id="share-heading">Freigaben</h2>
+    <p class="muted">Dein Freund sieht nur, was du hier einschaltest. Private Termine und Notizen sieht er nie.</p>
+    <label class="switch-row"><input type="checkbox" id="sh-calendar"><span>📅 Kalender</span></label>
+    <label class="switch-row"><input type="checkbox" id="sh-timetable"><span>🗓️ Stundenplan</span></label>
+    <label class="switch-row"><input type="checkbox" id="sh-todos"><span>✅ Aufgaben</span></label>
+    <p class="error" id="sh-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="sh-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary">Speichern</button>
+    </div>
+    <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
+  </form>
+
+  <script src="config.js?v=22"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>
