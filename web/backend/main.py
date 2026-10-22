@@ -589,6 +589,58 @@ def friend_delete(user_id: int, uid: int = Depends(current_user)):
     return {"ok": True}
 
 
+class ShareIn(BaseModel):
+    calendar: bool = False
+    timetable: bool = False
+    todos: bool = False
+
+
+FRIEND_EVENT_FIELDS = ("id", "title", "start_date", "end_date", "start_time", "end_time", "color", "icon")
+
+
+def _is_friend(uid: int, other: int) -> bool:
+    f = store.get_friendship(uid, other)
+    return bool(f and f["status"] == "accepted")
+
+
+def _shared(uid: int, friend_id: int, what: str) -> None:
+    """404, wenn nicht befreundet oder `what` nicht freigegeben (verrät nicht, welcher Fall vorliegt)."""
+    if not _is_friend(uid, friend_id) or not store.get_share(friend_id, uid)[what]:
+        raise HTTPException(404, "Nicht gefunden.")
+
+
+@app.put("/api/friends/{user_id}/share")
+def friend_share(user_id: int, body: ShareIn, uid: int = Depends(current_user)):
+    if not _is_friend(uid, user_id):
+        raise HTTPException(404, "Nicht gefunden.")
+    return store.set_share(uid, user_id, body.calendar, body.timetable, body.todos)
+
+
+@app.get("/api/friends/{user_id}/events")
+def friend_events(
+    user_id: int,
+    date_from: str = Query(alias="from", pattern=DATE_RE),
+    date_to: str = Query(alias="to", pattern=DATE_RE),
+    uid: int = Depends(current_user),
+):
+    _shared(uid, user_id, "calendar")
+    # Private Termine und Notizen verlassen den Server nie in Richtung Freund
+    return [{k: e[k] for k in FRIEND_EVENT_FIELDS} for e in store.list_events(user_id, date_from, date_to) if not e.get("private")]
+
+
+@app.get("/api/friends/{user_id}/timetable")
+def friend_timetable(user_id: int, uid: int = Depends(current_user)):
+    _shared(uid, user_id, "timetable")
+    return store.list_classes(user_id)
+
+
+@app.get("/api/friends/{user_id}/todos")
+def friend_todos(user_id: int, uid: int = Depends(current_user)):
+    _shared(uid, user_id, "todos")
+    lists = store.list_lists(user_id)
+    return {"lists": lists, "todos": _with_list_info(store.list_todos(user_id), lists)}
+
+
 # ---------- Chat ----------
 class Msg(BaseModel):
     role: str = Field(pattern="^(user|assistant)$")

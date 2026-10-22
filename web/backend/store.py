@@ -347,6 +347,16 @@ class SqliteStore:
             row = c.execute("SELECT calendar,timetable,todos FROM shares WHERE owner_id=? AND viewer_id=?", (owner_id, viewer_id)).fetchone()
         return {k: bool(row[k]) if row else False for k in SHARE_FIELDS}
 
+    def set_share(self, owner_id, viewer_id, calendar, timetable, todos):
+        with self._db() as c:
+            c.execute(
+                "INSERT INTO shares(owner_id,viewer_id,calendar,timetable,todos) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(owner_id,viewer_id) DO UPDATE SET calendar=excluded.calendar, "
+                "timetable=excluded.timetable, todos=excluded.todos",
+                (owner_id, viewer_id, int(calendar), int(timetable), int(todos)),
+            )
+        return {"calendar": bool(calendar), "timetable": bool(timetable), "todos": bool(todos)}
+
 
 class SupabaseStore:
     """Spricht PostgREST mit dem Service-Key an. Der Key darf NUR im Backend liegen."""
@@ -542,6 +552,13 @@ class SupabaseStore:
         rows = self._get("shares", {"owner_id": f"eq.{owner_id}", "viewer_id": f"eq.{viewer_id}", "select": "calendar,timetable,todos"})
         return {k: bool(rows[0][k]) if rows else False for k in SHARE_FIELDS}
 
+    def set_share(self, owner_id, viewer_id, calendar, timetable, todos):
+        share = {"calendar": bool(calendar), "timetable": bool(timetable), "todos": bool(todos)}
+        r = self.http.post("/shares", json={"owner_id": owner_id, "viewer_id": viewer_id, **share},
+                           headers={"Prefer": "resolution=merge-duplicates"})
+        r.raise_for_status()
+        return share
+
 
 def _make():
     url, key = os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
@@ -584,3 +601,4 @@ accept_friendship = _impl.accept_friendship
 delete_friendship = _impl.delete_friendship
 list_friendships = _impl.list_friendships
 get_share = _impl.get_share
+set_share = _impl.set_share
