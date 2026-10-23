@@ -854,3 +854,7 @@ body::before {
 .bubble.on .bubble-dot { background: var(--c); border-color: transparent; }
 .eyebrow { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--muted); }
 .list-card::before { background: var(--c); opacity: .8; }
+
+/* ---------- Kalender: Gleiten ---------- */
+#view-calendar, #view-friend { overflow-x: clip; }
+.cal-grid { touch-action: pan-y; will-change: transform; }

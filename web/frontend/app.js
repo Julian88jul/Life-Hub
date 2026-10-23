@@ -618,6 +618,60 @@
     if (cell && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); selectDate(cell.dataset.date); }
   });
 
+  // ---------- Kalender: Gleiten beim Wechseln (Wischen, Pfeile, Pfeiltasten) ----------
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const SLIDE_OUT_MS = 140, SLIDE_IN_MS = 240;
+  const clearAnims = (node) => node.getAnimations().forEach((a) => a.cancel());
+
+  // Raster gleitet heraus, `change` tauscht den Inhalt, dann gleitet das neue von der Gegenseite herein.
+  // dir: +1 = vorwärts (neuer Inhalt kommt von rechts), -1 = zurück. `from` = aktueller Versatz in Pixeln (beim Wischen).
+  function slideGrid(grid, dir, change, from = 0) {
+    clearAnims(grid);
+    grid.style.transform = grid.style.opacity = "";
+    if (reducedMotion.matches || !grid.animate) { change(); return; }
+    const out = grid.animate(
+      [{ transform: `translateX(${from}px)`, opacity: from ? 1 - Math.min(.5, Math.abs(from) / (grid.offsetWidth * 1.2)) : 1 },
+       { transform: `translateX(${-dir * 36}%)`, opacity: 0 }],
+      { duration: SLIDE_OUT_MS, easing: "ease-in", fill: "forwards" });
+    out.finished.then(() => {
+      change();
+      clearAnims(grid);
+      grid.animate([{ transform: `translateX(${dir * 36}%)`, opacity: 0 }, { transform: "translateX(0)", opacity: 1 }],
+        { duration: SLIDE_IN_MS, easing: "cubic-bezier(.2, .8, .2, 1)" });
+    }).catch(() => {});
+  }
+
+  // Raster folgt dem Finger; beim Loslassen weit genug (> ¼ Breite) oder schnell: wechseln, sonst zurückfedern
+  function bindSwipe(area, grid, onShift, { blocked = () => false, onStart = () => {} } = {}) {
+    let s = null;
+    const springBack = () => {
+      const from = s ? s.dx * .55 : 0;
+      grid.style.transform = grid.style.opacity = "";
+      if (from && !reducedMotion.matches && grid.animate) grid.animate([{ transform: `translateX(${from}px)` }, { transform: "translateX(0)" }], { duration: 220, easing: "cubic-bezier(.2, .8, .2, 1)" });
+    };
+    area.addEventListener("touchstart", (e) => { onStart(); s = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, dx: 0, active: false }; clearAnims(grid); }, { passive: true });
+    area.addEventListener("touchmove", (e) => {
+      if (!s || blocked()) return;
+      const dx = e.touches[0].clientX - s.x, dy = e.touches[0].clientY - s.y;
+      if (!s.active) { if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) s.active = true; else return; }
+      s.dx = dx;
+      grid.style.transform = `translateX(${dx * .55}px)`;
+      grid.style.opacity = String(1 - Math.min(.5, Math.abs(dx) / (grid.offsetWidth * 1.2)));
+    }, { passive: true });
+    const finish = (e) => {
+      const t = s; s = null;
+      if (!t || !t.active) return;
+      if (blocked()) { s = t; springBack(); s = null; return; }
+      const dt = Math.max(1, e.timeStamp - t.t);
+      const far = Math.abs(t.dx) > Math.max(60, grid.offsetWidth * .25);
+      const fast = Math.abs(t.dx) > 40 && Math.abs(t.dx) / dt > .5;
+      if (far || fast) { const dir = t.dx < 0 ? 1 : -1; slideGrid(grid, dir, () => onShift(dir), t.dx * .55); }
+      else { s = t; springBack(); s = null; }
+    };
+    area.addEventListener("touchend", finish, { passive: true });
+    area.addEventListener("touchcancel", () => { if (s && s.active) springBack(); s = null; }, { passive: true });
+  }
+
   function shiftState(s, delta) {
     if (s.view === "week") {
       const d = addDays(parseIso(s.selected), 7 * delta);
@@ -627,9 +681,11 @@
       s.year = d.getFullYear(); s.month = d.getMonth();
     }
   }
-  function shiftMonth(delta) { shiftState(state, delta); loadMonth(); }
-  $("cal-prev").addEventListener("click", () => shiftMonth(-1));
-  $("cal-next").addEventListener("click", () => shiftMonth(1));
+  // Sofort das neue Raster zeigen (mit den vorhandenen Daten), die Termine kommen kurz danach nach
+  function shiftMonth(delta) { shiftState(state, delta); renderCalendar(); loadMonth(); }
+  const slideMonth = (delta) => slideGrid($("cal-grid"), delta, () => shiftMonth(delta));
+  $("cal-prev").addEventListener("click", () => slideMonth(-1));
+  $("cal-next").addEventListener("click", () => slideMonth(1));
 
   // Umschalten zwischen Monats- und Wochenansicht (die Auswahl bleibt erhalten)
   document.querySelectorAll("[data-cview]").forEach((b) => b.addEventListener("click", () => {
@@ -642,16 +698,8 @@
   }));
   $("day-add").addEventListener("click", () => openSheet(state.selected, state.selected));
 
-  // Wischen im Kalender wechselt den Monat
-  let swipe = null;
-  $("view-calendar").addEventListener("touchstart", (e) => { rangeGesture = false; swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
-  $("view-calendar").addEventListener("touchend", (e) => {
-    const s = swipe; swipe = null;
-    if (!s || rangeGesture) { rangeGesture = false; return; }
-    const dx = e.changedTouches[0].clientX - s.x;
-    const dy = e.changedTouches[0].clientY - s.y;
-    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2) shiftMonth(dx < 0 ? 1 : -1);
-  }, { passive: true });
+  // Wischen im Kalender wechselt Monat bzw. Woche (das Raster folgt dem Finger)
+  bindSwipe($("view-calendar"), $("cal-grid"), shiftMonth, { blocked: () => rangeGesture, onStart: () => { rangeGesture = false; } });
 
   // ---------- Termin-Formular ----------
   const swatches = $("f-colors");
@@ -1720,8 +1768,21 @@
     $("fv-grid").querySelectorAll(".day").forEach((c) => c.classList.toggle("selected", c.dataset.date === fv.selected));
     fvRenderDay();
   });
-  $("fv-prev").addEventListener("click", () => { shiftState(fv, -1); fvLoadCal(); });
-  $("fv-next").addEventListener("click", () => { shiftState(fv, 1); fvLoadCal(); });
+  const fvShift = (delta) => { shiftState(fv, delta); fvRenderCal(); fvLoadCal(); };
+  const fvSlide = (delta) => slideGrid($("fv-grid"), delta, () => fvShift(delta));
+  $("fv-prev").addEventListener("click", () => fvSlide(-1));
+  $("fv-next").addEventListener("click", () => fvSlide(1));
+  bindSwipe($("fv-calendar"), $("fv-grid"), fvShift);
+
+  // Pfeiltasten ←/→ blättern im sichtbaren Kalender (nicht, solange man tippt oder ein Fenster offen ist)
+  document.addEventListener("keydown", (e) => {
+    if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable]")) return;
+    if (!$("sheet-backdrop").hidden) return;
+    const delta = e.key === "ArrowLeft" ? -1 : 1;
+    if ($("view-calendar").classList.contains("active")) slideMonth(delta);
+    else if ($("view-friend").classList.contains("active") && !$("fv-calendar").hidden) fvSlide(delta);
+  });
   document.querySelectorAll("[data-fcview]").forEach((b) => b.addEventListener("click", () => {
     if (fv.view === b.dataset.fcview) return;
     fv.view = b.dataset.fcview;
