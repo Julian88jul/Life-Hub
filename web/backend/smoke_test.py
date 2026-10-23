@@ -48,7 +48,7 @@ with TestClient(main.app) as c:
     other = c.post("/api/auth/register", json={**body, "username": "bert"}).json()["token"]
     HO = auth(other)
 
-    check("Sitzung prüfen (me)", c.get("/api/auth/me", headers=H).json() == {"username": "anna"})
+    check("Sitzung prüfen (me)", c.get("/api/auth/me", headers=H).json() == {"username": "anna", "avatar": ""})
     check("me ohne Login gesperrt", c.get("/api/auth/me").status_code == 401)
 
     print("Termine")
@@ -124,7 +124,7 @@ with TestClient(main.app) as c:
     check("Annehmen", c.post(f"/api/friends/{anna_id}/accept", headers=HO).json()["status"] == "accepted")
     fa = c.get("/api/friends", headers=H).json()
     off = {"calendar": False, "timetable": False, "todos": False}
-    check("Freund in Liste, Freigaben aus", fa["friends"] == [{"id": bert_id, "username": "bert", "they_share": off, "i_share": off}])
+    check("Freund in Liste, Freigaben aus", fa["friends"] == [{"id": bert_id, "username": "bert", "avatar": "", "they_share": off, "i_share": off}])
     check("Keine offenen Anfragen mehr", fa["incoming"] == [] and fa["outgoing"] == [])
     c.post("/api/friends/request", json={"username": "anna"}, headers=HC)
     check("Gegenanfrage nimmt sofort an", c.post("/api/friends/request", json={"username": "carl"}, headers=H).json()["status"] == "accepted")
@@ -132,6 +132,23 @@ with TestClient(main.app) as c:
     check("Nach Entfernen nicht mehr in Liste", all(x["username"] != "anna" for x in c.get("/api/friends", headers=HO).json()["friends"]))
     check("Entfernen ohne Freundschaft", c.delete(f"/api/friends/{bert_id}", headers=H).status_code == 404)
     check("Freunde ohne Login gesperrt", c.get("/api/friends").status_code == 401)
+
+    print("Profilbild")
+    check("Kein Bild am Anfang", c.get("/api/auth/me", headers=H).json()["avatar"] == "")
+    r = c.put("/api/auth/avatar", json={"avatar": "mia"}, headers=H)
+    check("Figur wählen", r.status_code == 200 and r.json() == {"avatar": "mia"})
+    check("me zeigt Figur", c.get("/api/auth/me", headers=H).json()["avatar"] == "mia")
+    check("Unbekannte Figur abgelehnt", c.put("/api/auth/avatar", json={"avatar": "../hack"}, headers=H).status_code == 422)
+    check("Figur bleibt nach Fehlversuch", c.get("/api/auth/me", headers=H).json()["avatar"] == "mia")
+    check("Bild ohne Login gesperrt", c.put("/api/auth/avatar", json={"avatar": "max"}).status_code == 401)
+    c.post("/api/friends/request", json={"username": "bert"}, headers=H)
+    c.put("/api/auth/avatar", json={"avatar": "sam"}, headers=HO)
+    c.post(f"/api/friends/{c.get('/api/friends', headers=HO).json()['incoming'][0]['id']}/accept", headers=HO)
+    fa2 = c.get("/api/friends", headers=H).json()["friends"]
+    check("Freund sieht Figur", next(x for x in fa2 if x["username"] == "bert")["avatar"] == "sam")
+    check("Andere sehen meine Figur", next(x for x in c.get("/api/friends", headers=HO).json()["friends"] if x["username"] == "anna")["avatar"] == "mia")
+    check("Figur zurücksetzen", c.put("/api/auth/avatar", json={"avatar": ""}, headers=H).json() == {"avatar": ""})
+    c.delete(f"/api/friends/{next(x for x in fa2 if x['username'] == 'bert')['id']}", headers=H)
 
     print("Freigaben")
     carl_fid = next(x["id"] for x in c.get("/api/friends", headers=H).json()["friends"] if x["username"] == "carl")

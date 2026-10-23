@@ -88,6 +88,7 @@
   function logout(clearChat = true) {
     token = "";
     store.del("token");
+    store.del("avatar"); myAvatar = ""; // die Figur gehört zum Konto
     if (clearChat) { store.del("chat"); history = []; log.replaceChildren(); }
     $("app").hidden = true;
     $("tabbar").hidden = true;
@@ -1545,6 +1546,28 @@
     if (impResult) commitImport(); else if (impFiles.length) analyzeImages();
   });
 
+  // ---------- Mein Bild (Figur wählen) ----------
+  let myAvatar = store.get("avatar", "");
+  function renderAvatarPick() {
+    const box = $("avatar-pick");
+    if (!window.LH_AVATARS) return;
+    box.replaceChildren(...LH_AVATARS.defs.map((d) => {
+      const on = d.id === myAvatar;
+      const b = el("button", { type: "button", className: "avatar-opt" + (on ? " on" : ""), role: "radio", ariaLabel: `Figur ${d.name}` });
+      b.setAttribute("aria-checked", String(on));
+      b.append(LH_AVATARS.canvas(d.id, 96));
+      b.addEventListener("click", () => chooseAvatar(on ? "" : d.id)); // nochmal antippen = wieder Buchstabe
+      return b;
+    }));
+  }
+  async function chooseAvatar(id) {
+    const before = myAvatar;
+    myAvatar = id; store.set("avatar", id); renderAvatarPick();
+    try { await api("/api/auth/avatar", { method: "PUT", body: { avatar: id } }); }
+    catch (e) { myAvatar = before; store.set("avatar", before); renderAvatarPick(); showToast(e.message); }
+  }
+  renderAvatarPick();
+
   // ---------- Freunde ----------
   const friendsState = { friends: [], incoming: [], outgoing: [] };
   let sharingFriend = null;
@@ -1552,11 +1575,20 @@
   const friendColor = (id) => PALETTE[id % PALETTE.length];
   const initial = (name) => (name || "?").charAt(0).toUpperCase();
 
-  function avatar(f) {
-    const a = el("span", { className: "friend-avatar", textContent: initial(f.username) });
-    a.style.setProperty("--c", friendColor(f.id));
-    return a;
+  // Rundes Bild einer Person: die gewählte Figur, sonst der Anfangsbuchstabe
+  function paintAvatar(node, f) {
+    node.style.setProperty("--c", friendColor(f.id));
+    node.replaceChildren();
+    if (f.avatar && window.LH_AVATARS && LH_AVATARS.has(f.avatar)) {
+      node.classList.add("pixel");
+      node.append(LH_AVATARS.canvas(f.avatar, 96));
+    } else {
+      node.classList.remove("pixel");
+      node.textContent = initial(f.username);
+    }
+    return node;
   }
+  function avatar(f) { return paintAvatar(el("span", { className: "friend-avatar" }), f); }
 
   async function loadFriends() {
     try { Object.assign(friendsState, await api("/api/friends")); } catch { return; }
@@ -1582,7 +1614,7 @@
     box.replaceChildren(...sharers.map((f) => {
       const on = activeIds.includes(f.id);
       const b = el("button", { type: "button", className: "bubble" + (on ? " on" : ""), title: f.username, ariaLabel: `${f.username} ${on ? "ausblenden" : "einblenden"}` },
-        el("span", { className: "bubble-dot", textContent: initial(f.username) }), el("small", { textContent: f.username }));
+        paintAvatar(el("span", { className: "bubble-dot" }), f), el("small", { textContent: f.username }));
       b.setAttribute("aria-pressed", String(on));
       b.style.setProperty("--c", friendColor(f.id));
       b.addEventListener("click", () => {
@@ -1679,8 +1711,7 @@
     const t = new Date();
     Object.assign(fv, { friend: f, view: state.view, year: t.getFullYear(), month: t.getMonth(), selected: iso(t), day: weekdayOf(t), events: [], classes: [] });
     $("fv-name").textContent = f.username;
-    $("fv-avatar").textContent = initial(f.username);
-    $("fv-avatar").style.setProperty("--c", friendColor(f.id));
+    paintAvatar($("fv-avatar"), f);
     const avail = SHARE_KEYS.map(([k]) => k).filter((k) => f.they_share[k]);
     document.querySelectorAll("[data-fview]").forEach((b) => { b.hidden = !avail.includes(b.dataset.fview); });
     $("fv-tabs").hidden = avail.length < 2;
@@ -1741,8 +1772,7 @@
     const main = el("div", { className: "event-main clickable" }, el("b", { textContent: (ev.icon ? ev.icon + " " : "") + ev.title }));
     const li = el("li", { className: "friend-event" + (badgeFriend ? " overlay" : "") }, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main);
     if (badgeFriend) {
-      const mini = el("span", { className: "friend-mini", textContent: initial(ownerName), title: ownerName });
-      mini.style.setProperty("--c", friendColor(badgeFriend.id));
+      const mini = paintAvatar(el("span", { className: "friend-mini", title: ownerName }), badgeFriend);
       li.append(mini);
     }
     li.addEventListener("click", () => peekEvent(ev, ownerName));
@@ -1937,6 +1967,7 @@
     try {
       const me = await api("/api/auth/me");
       store.set("user", me.username);
+      myAvatar = me.avatar || ""; store.set("avatar", myAvatar); renderAvatarPick();
     } catch (e) {
       if (!token) { $("a-error").textContent = e.message; $("a-error").hidden = false; } // 401: api() hat bereits abgemeldet
     }

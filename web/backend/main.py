@@ -132,7 +132,27 @@ def me(uid: int = Depends(current_user)):
     user = store.get_user_by_id(uid)
     if not user:
         raise HTTPException(401, "Dieses Konto gibt es nicht mehr. Bitte neu registrieren oder anmelden.")
-    return {"username": user["username"]}
+    return {"username": user["username"], "avatar": user.get("avatar") or ""}
+
+
+# Figuren (Pixel-Avatare); gespeichert wird nur die Kennung. Muss zu web/frontend/avatars.js passen.
+AVATARS = ("mia", "lea", "zoe", "nora", "ida", "kim", "max", "ben", "jonas", "leo", "tim", "sam")
+
+
+class AvatarIn(BaseModel):
+    avatar: str = Field(default="", max_length=16)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.avatar and self.avatar not in AVATARS:
+            raise ValueError("Unbekannte Figur.")
+        return self
+
+
+@app.put("/api/auth/avatar")
+def put_avatar(body: AvatarIn, uid: int = Depends(current_user)):
+    store.set_avatar(uid, body.avatar)
+    return {"avatar": body.avatar}
 
 
 @app.post("/api/auth/password")
@@ -546,10 +566,10 @@ def get_friends(uid: int = Depends(current_user)):
         if not user:
             continue
         if f["status"] == "accepted":
-            out["friends"].append({"id": other, "username": user["username"],
+            out["friends"].append({"id": other, "username": user["username"], "avatar": user.get("avatar") or "",
                                    "they_share": store.get_share(other, uid), "i_share": store.get_share(uid, other)})
         else:
-            out["outgoing" if f["requester_id"] == uid else "incoming"].append({"id": other, "username": user["username"]})
+            out["outgoing" if f["requester_id"] == uid else "incoming"].append({"id": other, "username": user["username"], "avatar": user.get("avatar") or ""})
     out["friends"].sort(key=lambda x: x["username"])
     return out
 

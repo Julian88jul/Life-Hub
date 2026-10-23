@@ -95,3 +95,6 @@ alter table friendships enable row level security;
 alter table shares enable row level security;
 grant all on friendships, shares to service_role;
 grant all on all sequences in schema public to service_role;
+
+-- ---------- Profilbild (Update: bei bestehendem Projekt ausführen) ----------
+alter table users add column if not exists avatar text not null default '';

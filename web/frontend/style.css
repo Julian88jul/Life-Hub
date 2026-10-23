@@ -858,3 +858,20 @@ body::before {
 /* ---------- Kalender: Gleiten ---------- */
 #view-calendar, #view-friend { overflow-x: clip; }
 .cal-grid { touch-action: pan-y; will-change: transform; }
+
+/* ---------- Figuren (Pixel-Avatare) ---------- */
+.friend-avatar.pixel, .bubble-dot.pixel, .friend-mini.pixel { padding: 0; overflow: hidden; background: none; border-color: transparent; }
+.pixel > canvas { width: 100% !important; height: 100% !important; image-rendering: pixelated; }
+.bubble:not(.on) .bubble-dot.pixel { border: 2px dashed var(--line-strong); filter: grayscale(.9) brightness(.7); }
+.bubble.on .bubble-dot.pixel { border: 2px solid var(--accent); background: none; }
+.friend-avatar.pixel { box-shadow: none; }
+.avatar-pick-wrap { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.avatar-pick { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-top: 10px; }
+.avatar-opt {
+  width: 100%; aspect-ratio: 1; padding: 0; border-radius: 50%; overflow: hidden; background: none;
+  border: 3px solid transparent; transition: transform .12s, border-color .15s;
+}
+.avatar-opt canvas { width: 100% !important; height: 100% !important; border-radius: 50%; }
+.avatar-opt:active { transform: scale(.92); }
+.avatar-opt.on { border-color: var(--accent); }
+.avatar-opt:not(.on) { opacity: .92; }
