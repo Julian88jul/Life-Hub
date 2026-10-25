@@ -1549,7 +1549,7 @@
   });
 
   // ---------- Börse ----------
-  const mk = { watch: [], quotes: {}, available: true, brief: null, briefErr: "", loadedAt: 0, searchTimer: null, searchSeq: 0 };
+  const mk = { watch: [], quotes: {}, series: {}, indices: [], available: true, brief: null, briefErr: "", loadedAt: 0, searchTimer: null, searchSeq: 0 };
 
   function fmtPrice(p, cur) {
     if (p == null) return "–";
@@ -1565,9 +1565,38 @@
     if (!force && Date.now() - mk.loadedAt < 60000) { renderMarket(); return; }
     mk.loadedAt = Date.now();
     try { mk.watch = await api("/api/watchlist"); } catch { mk.watch = []; }
-    try { const q = await api("/api/market/quotes"); mk.available = q.available; mk.quotes = q.quotes || {}; }
-    catch { mk.available = false; mk.quotes = {}; }
+    try { const q = await api("/api/market/quotes"); mk.available = q.available; mk.quotes = q.quotes || {}; mk.series = q.series || {}; }
+    catch { mk.available = false; mk.quotes = {}; mk.series = {}; }
     renderMarket();
+    try { const o = await api("/api/market/overview"); mk.indices = o.available ? o.indices : []; } catch { mk.indices = []; }
+    renderIndices();
+  }
+
+  // Kleine Verlaufskurve (SVG); grün, wenn der letzte Wert über dem ersten liegt
+  function sparkline(values, w = 80, h = 24) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    svg.setAttribute("class", "spark");
+    svg.setAttribute("aria-hidden", "true");
+    if (!values || values.length < 2) return svg;
+    const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1;
+    const pts = values.map((v, i) => `${(i / (values.length - 1) * w).toFixed(1)},${(h - 2 - (v - lo) / span * (h - 4)).toFixed(1)}`);
+    const line = document.createElementNS(ns, "polyline");
+    line.setAttribute("points", pts.join(" "));
+    line.setAttribute("class", values[values.length - 1] >= values[0] ? "up" : "down");
+    svg.append(line);
+    return svg;
+  }
+
+  function renderIndices() {
+    const tiles = (big) => (mk.indices || []).map((ix) => el("div", { className: "ix" },
+      el("span", { className: "ix-name", textContent: ix.name }),
+      el("b", { className: `ix-pct ${pctClass(ix.change_pct)}`, textContent: ix.change_pct == null ? "–" : fmtPct(ix.change_pct) }),
+      sparkline(ix.series, big ? 120 : 80, big ? 34 : 24)));
+    $("mc-indices").replaceChildren(...tiles(false));
+    $("mb-indices").replaceChildren(...tiles(true));
+    $("mc-indices").hidden = $("mb-indices").hidden = !(mk.indices || []).length;
   }
 
   // Briefing des Tages (wird beim ersten Abruf des Tages von der KI erstellt)
@@ -1588,6 +1617,7 @@
       const b = quoteBits(w);
       const li = el("li", { className: "watch-row" },
         el("span", { className: "watch-main" }, el("b", { textContent: w.name || w.symbol }), el("small", { textContent: [w.symbol, w.exchange].filter(Boolean).join(" · ") })),
+        sparkline((mk.series || {})[w.symbol], 64, 24),
         el("span", { className: "watch-quote" }, el("b", { textContent: b.price == null ? (mk.available ? "Kurs nicht verfügbar" : "–") : fmtPrice(b.price, b.cur) }),
           el("small", { className: pctClass(b.pct), textContent: fmtPct(b.pct) })));
       longPress(li, async () => {
@@ -1603,38 +1633,73 @@
   const KIND_LABEL = { fed: "Fed", earnings: "Zahlen", data: "Daten", other: "Termin" };
   const shortDay = (isoDate) => { const d = parseIso(isoDate); return { wd: WEEKDAYS[d.getDay()].slice(0, 2), dm: `${d.getDate()}.${d.getMonth() + 1}.` }; };
 
-  function moverRow(m, compact) {
+  const logoColor = (name) => PALETTE[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTE.length];
+  function moverRow(m, compact, maxAbs = 1) {
+    const logo = el("span", { className: "mv-logo", textContent: (m.name || "?").charAt(0).toUpperCase() });
+    logo.style.setProperty("--c", logoColor(m.name || "?"));
     const pill = el("span", { className: `pct-pill ${pctClass(m.change_pct)}`, textContent: fmtPct(m.change_pct) });
     const main = el("span", { className: "mv-main" }, el("b", { textContent: m.name }));
     if (!compact && m.reason) main.append(el("small", { textContent: m.reason }));
-    return el("li", { className: "mv-row" }, main, pill);
+    const li = el("li", { className: "mv-row" }, el("span", { className: "mv-top" }, logo, main, pill));
+    if (!compact) {
+      const bar = el("span", { className: `mv-bar ${pctClass(m.change_pct)}` });
+      bar.style.width = `${Math.max(8, Math.abs(m.change_pct) / maxAbs * 100)}%`;
+      li.append(el("span", { className: "mv-track" }, bar));
+    }
+    return li;
   }
+  const MOOD = { "-2": "Risk-off", "-1": "Vorsichtig", "0": "Neutral", "1": "Freundlich", "2": "Risk-on" };
+  const NEWS_CAT = { politik: "Politik", zahlen: "Zahlen", fed: "Fed", konjunktur: "Konjunktur", sonstiges: "Markt" };
+  const daysUntil = (isoDate) => Math.round((parseIso(isoDate) - parseIso(iso(new Date()))) / 86400000);
+  const countdown = (n) => (n <= 0 ? "heute" : n === 1 ? "morgen" : `in ${n} Tagen`);
 
   function renderBrief() {
     const r = mk.brief;
     const b = r && r.brief;
     const fail = mk.briefErr || "Briefing gerade nicht verfügbar.";
-    // Heute-Karte: Lage, drei Bewegungen, nächster Termin
+    const mood = b && typeof b.stimmung === "number" ? b.stimmung : null;
+    const moodClass = mood == null ? "" : mood < 0 ? "down" : mood > 0 ? "up" : "";
+    const news = b ? b.news.map((n) => (typeof n === "string" ? { text: n, cat: "sonstiges" } : n)) : [];
+    const maxAbs = b && b.movers.length ? Math.max(...b.movers.map((m) => Math.abs(m.change_pct))) || 1 : 1;
+    // Heute-Karte
+    $("mc-mood").hidden = mood == null;
+    if (mood != null) {
+      $("mc-mood-label").textContent = MOOD[String(mood)];
+      $("mc-mood-label").className = moodClass;
+      $("mc-mood-fill").style.width = `${(mood + 2) / 4 * 80 + 12}%`;
+      $("mc-mood-fill").className = moodClass;
+    }
     $("mc-lage").textContent = b ? b.lage : fail;
-    $("mc-movers").replaceChildren(...(b ? b.movers.map((m) => moverRow(m, true)) : []));
+    $("mc-movers").replaceChildren(...(b ? b.movers.slice(0, 1).map((m) => moverRow(m, true)) : []));
     const next = b && b.upcoming[0];
     $("mc-next").hidden = !next;
-    if (next) { const d = shortDay(next.date); $("mc-next").textContent = `Nächster Termin · ${next.label} · ${d.wd} ${d.dm}`; }
+    if (next) { const d = shortDay(next.date); $("mc-next").textContent = `${d.wd} ${d.dm} · ${next.label} · ${countdown(daysUntil(next.date))}`; }
     // Börsen-Seite
     $("mb-stamp").textContent = !r ? "" : r.stale ? "Briefing von gestern" : `Stand heute, ${hm(r.created_at)} Uhr`;
     $("mb-lage").textContent = b ? b.lage : fail;
+    $("mb-mood").hidden = mood == null;
+    if (mood != null) {
+      $("mb-mood-knob").style.left = `${(mood + 2) / 4 * 100}%`;
+      $("mb-mood-label").textContent = MOOD[String(mood)];
+      $("mb-mood-label").className = moodClass;
+    }
     $("mb-note").hidden = !(r && r.stale);
     $("mb-note").textContent = "Das heutige Briefing konnte gerade nicht erstellt werden. Versuche es später mit „Neu laden“.";
-    $("mb-movers").replaceChildren(...(b ? b.movers.map((m) => moverRow(m, false)) : []));
-    $("mb-news").replaceChildren(...(b ? b.news.map((n) => el("li", { textContent: n })) : []));
-    $("mb-upcoming").replaceChildren(...(b ? b.upcoming.map((u) => {
+    $("mb-movers").replaceChildren(...(b ? b.movers.map((m) => moverRow(m, false, maxAbs)) : []));
+    $("mb-news").replaceChildren(...news.map((n, i) => el("li", {},
+      el("span", { className: "news-no", textContent: String(i + 1) }),
+      el("span", { className: "news-body" },
+        el("span", { className: `news-cat cat-${n.cat}`, textContent: NEWS_CAT[n.cat] || "Markt" }),
+        el("span", { className: "news-text", textContent: n.text })))));
+    $("mb-upcoming").replaceChildren(...(b ? b.upcoming.map((u, i) => {
       const d = shortDay(u.date);
-      return el("li", { className: "date-row" },
-        el("span", { className: "date-badge" }, el("small", { textContent: d.wd }), el("b", { textContent: d.dm })),
-        el("span", { className: "date-label", textContent: u.label }),
-        el("span", { className: `kind-tag kind-${u.kind}`, textContent: KIND_LABEL[u.kind] || "Termin" }));
+      return el("li", { className: "tl-item" + (i === 0 ? " next" : "") },
+        el("span", { className: `tl-dot kind-${u.kind}` }),
+        el("span", { className: "tl-body" },
+          el("span", { className: "tl-top" }, el("b", { textContent: u.label }), el("small", { className: "tl-count", textContent: countdown(daysUntil(u.date)) })),
+          el("small", { className: "tl-meta", textContent: `${d.wd} ${d.dm} · ${KIND_LABEL[u.kind] || "Termin"}` })));
     }) : []));
-    for (const [id, list] of [["mb-movers", b && b.movers], ["mb-news", b && b.news], ["mb-upcoming", b && b.upcoming]]) {
+    for (const [id, list] of [["mb-movers", b && b.movers], ["mb-news", news], ["mb-upcoming", b && b.upcoming]]) {
       const empty = !list || !list.length;
       $(id).hidden = empty;
       $(`${id}-head`).hidden = empty;

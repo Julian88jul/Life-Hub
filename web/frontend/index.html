@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=30">
+  <link rel="stylesheet" href="style.css?v=31">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -89,6 +89,11 @@
         <div class="row-between">
           <h2>Börse</h2>
           <span class="mc-open" aria-hidden="true">›</span>
+        </div>
+        <div class="ix-row" id="mc-indices"></div>
+        <div class="mood" id="mc-mood" hidden>
+          <div class="mood-head"><span>Stimmung</span><b id="mc-mood-label"></b></div>
+          <div class="mood-track"><span id="mc-mood-fill"></span></div>
         </div>
         <p class="mc-lage" id="mc-lage">Briefing wird geladen …</p>
         <ul class="mc-movers" id="mc-movers"></ul>
@@ -221,16 +226,21 @@
         <span class="mk-stamp" id="mb-stamp"></span>
         <button type="button" class="text-btn" id="mb-refresh">Neu laden</button>
       </div>
+      <div class="ix-row big" id="mb-indices"></div>
       <div class="card mk-hero">
         <p class="mk-lage" id="mb-lage">Briefing wird geladen …</p>
+        <div class="mood-scale" id="mb-mood" hidden>
+          <div class="mood-gradient"><span class="mood-knob" id="mb-mood-knob"></span></div>
+          <div class="mood-ends"><span>Risk-off</span><b id="mb-mood-label"></b><span>Risk-on</span></div>
+        </div>
         <p class="hint left" id="mb-note" hidden></p>
       </div>
       <h2 class="section-head" id="mb-movers-head">Stärkste Bewegungen</h2>
       <ul class="mover-list" id="mb-movers"></ul>
       <h2 class="section-head" id="mb-news-head">Wichtigste News</h2>
-      <ul class="news-list card" id="mb-news"></ul>
+      <ol class="news-list card" id="mb-news"></ol>
       <h2 class="section-head" id="mb-upcoming-head">Termine</h2>
-      <ul class="date-list" id="mb-upcoming"></ul>
+      <ul class="timeline" id="mb-upcoming"></ul>
       <div class="row-between mk-watch-head">
         <h2 class="section-head">Watchlist</h2>
         <button type="button" class="text-btn" id="watch-add-btn" aria-expanded="false">+ Titel</button>
@@ -500,8 +510,8 @@
     <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
   </form>
 
-  <script src="avatars.js?v=30"></script>
-  <script src="config.js?v=30"></script>
-  <script src="app.js?v=30"></script>
+  <script src="avatars.js?v=31"></script>
+  <script src="config.js?v=31"></script>
+  <script src="app.js?v=31"></script>
 </body>
 </html>
