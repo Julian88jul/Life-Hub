@@ -875,3 +875,31 @@ body::before {
 .avatar-opt:active { transform: scale(.92); }
 .avatar-opt.on { border-color: var(--accent); }
 .avatar-opt:not(.on) { opacity: .92; }
+
+/* ---------- Börse ---------- */
+.market-card { cursor: pointer; }
+.market-card:active { transform: scale(.99); }
+.ticker { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none; }
+.ticker::-webkit-scrollbar { display: none; }
+.tick {
+  flex: none; display: flex; flex-direction: column; gap: 1px; padding: 8px 12px; border-radius: 14px;
+  background: var(--surface-2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; font-size: 13px;
+}
+.tick b { font-size: 13px; }
+.up { color: #3fbf7f; }
+.down { color: var(--danger); }
+:root[data-theme="light"] .up { color: #138a52; }
+.market-teaser { color: var(--text); font-size: 15px; line-height: 1.5; margin: 4px 0 0; }
+.market-brief { font-size: 16px; line-height: 1.65; margin: 4px 0 0; white-space: pre-wrap; }
+#mb-refresh:disabled { color: var(--muted); cursor: default; font-weight: 500; }
+.watch-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.watch-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); -webkit-user-select: none; user-select: none; }
+.watch-row:first-child { border-top: 0; }
+.watch-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.watch-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-main small, .watch-quote small { color: var(--muted); font-size: 13px; }
+.watch-quote { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; }
+.watch-quote small.up { color: #3fbf7f; }
+.watch-quote small.down { color: var(--danger); }
+.watch-search input { width: 100%; }
+#watch-results button small { color: var(--muted); }

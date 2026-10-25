@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=28">
+  <link rel="stylesheet" href="style.css?v=29">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -84,6 +84,14 @@
       <div class="card">
         <h2>Nächste 7 Tage</h2>
         <ul class="event-list" id="upcoming-events"></ul>
+      </div>
+      <div class="card market-card" id="market-card" role="button" tabindex="0" aria-label="Börse öffnen">
+        <div class="row-between">
+          <h2>Börse</h2>
+          <span class="text-btn" aria-hidden="true">Öffnen ›</span>
+        </div>
+        <div class="ticker" id="market-ticker"></div>
+        <p class="market-teaser" id="market-teaser">Briefing wird geladen …</p>
       </div>
       <div class="tiles">
         <div class="tile disabled"><span>✉️</span><b>E-Mails</b><small>bald</small></div>
@@ -200,6 +208,33 @@
         </div>
         <ul class="task-list done" id="task-done"></ul>
       </div>
+    </section>
+
+    <section id="view-market" class="view" aria-label="Börse">
+      <header class="detail-head">
+        <button type="button" class="icon-btn" id="market-back" aria-label="Zurück">‹</button>
+        <div class="detail-title"><h1>Börse</h1></div>
+        <span class="head-spacer"></span>
+      </header>
+      <div class="card">
+        <div class="row-between">
+          <h2 id="mb-stamp">Briefing</h2>
+          <button type="button" class="text-btn" id="mb-refresh">Neu laden</button>
+        </div>
+        <p class="market-brief" id="mb-text">Briefing wird geladen …</p>
+        <p class="hint left" id="mb-note" hidden></p>
+      </div>
+      <div class="card">
+        <h2>Watchlist</h2>
+        <ul class="watch-list" id="watch-list"></ul>
+        <p class="error" id="watch-error" hidden></p>
+        <form class="inline-form watch-search" id="watch-form" autocomplete="off">
+          <input id="watch-q" type="search" placeholder="Aktie oder ETF suchen" aria-label="Aktie oder ETF suchen" maxlength="40" autocapitalize="none" spellcheck="false">
+        </form>
+        <ul class="result-list" id="watch-results"></ul>
+        <p class="hint left" id="watch-hint">Gedrückt halten zum Entfernen. Deutsche Aktien findest du über ihre US-Notierung (z. B. SAP), MSCI World z. B. als URTH.</p>
+      </div>
+      <p class="hint">Keine Anlageberatung. Kurse können verzögert sein.</p>
     </section>
 
     <section id="view-friends" class="view" aria-label="Freunde">
@@ -455,8 +490,8 @@
     <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
   </form>
 
-  <script src="avatars.js?v=28"></script>
-  <script src="config.js?v=28"></script>
-  <script src="app.js?v=28"></script>
+  <script src="avatars.js?v=29"></script>
+  <script src="config.js?v=29"></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>

@@ -124,7 +124,8 @@
     if (name === "todos") loadTodos();
     if (name === "chat") scrollChat();
     if (name === "friends") { renderFriends(); loadFriends(); }
-    if (!["friends", "friend"].includes(name)) store.set("tab", name); // Freunde-Ansichten nicht als Start-Tab merken
+    if (name === "market") { loadMarket(true); loadBriefing(); }
+    if (!["friends", "friend", "market"].includes(name)) store.set("tab", name); // Unterseiten nicht als Start-Tab merken
   }
   document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.querySelectorAll("[data-goto]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.goto)));
@@ -266,6 +267,7 @@
     $("today-date").textContent = longDate(todayKey);
     $("whoami").textContent = store.get("user", "") ? `Angemeldet als ${store.get("user", "")}` : "";
     renderWeather();
+    loadMarket(); loadBriefing();
     try {
       const [evs, todos, classes] = await Promise.all([api(`/api/events?from=${todayKey}&to=${weekKey}`), api("/api/todos"), api("/api/timetable")]);
       renderTodayClasses(classes);
@@ -1545,6 +1547,124 @@
     e.preventDefault();
     if (impResult) commitImport(); else if (impFiles.length) analyzeImages();
   });
+
+  // ---------- Börse ----------
+  const mk = { watch: [], quotes: {}, available: true, brief: null, briefErr: "", loadedAt: 0, searchTimer: null, searchSeq: 0 };
+
+  function fmtPrice(p, cur) {
+    if (p == null) return "–";
+    try { return new Intl.NumberFormat("de-DE", { style: "currency", currency: cur || "USD" }).format(p); }
+    catch { return new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(p) + (cur ? ` ${cur}` : ""); }
+  }
+  const fmtPct = (v) => (v == null ? "" : `${v > 0 ? "+" : ""}${v.toFixed(2).replace(".", ",")} %`);
+  const pctClass = (v) => (v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : "");
+  const hm = (ts) => { const d = new Date(ts * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+  // Watchlist und Kurse; höchstens alle 60 Sekunden neu (außer `force`)
+  async function loadMarket(force = false) {
+    if (!force && Date.now() - mk.loadedAt < 60000) { renderMarket(); return; }
+    mk.loadedAt = Date.now();
+    try { mk.watch = await api("/api/watchlist"); } catch { mk.watch = []; }
+    try { const q = await api("/api/market/quotes"); mk.available = q.available; mk.quotes = q.quotes || {}; }
+    catch { mk.available = false; mk.quotes = {}; }
+    renderMarket();
+  }
+
+  // Briefing des Tages (wird beim ersten Abruf des Tages von der KI erstellt)
+  async function loadBriefing(force = false) {
+    if (!force && mk.brief && !mk.brief.stale && mk.brief.day === iso(new Date())) { renderBrief(); return; }
+    try { mk.brief = await api("/api/market/briefing"); mk.briefErr = ""; } catch (e) { mk.brief = null; mk.briefErr = e.message; }
+    renderBrief();
+  }
+
+  function quoteBits(w) {
+    const q = mk.quotes[w.symbol] || {};
+    return { price: q.error ? null : q.price, pct: q.error ? null : q.change_pct, cur: q.currency || w.currency };
+  }
+
+  function renderMarket() {
+    const t = $("market-ticker");
+    if (!mk.watch.length) t.replaceChildren(el("span", { className: "muted", textContent: "Füge Aktien hinzu, um ihre Kurse zu sehen." }));
+    else t.replaceChildren(...mk.watch.map((w) => {
+      const b = quoteBits(w);
+      return el("span", { className: "tick" }, el("b", { textContent: w.symbol }), el("span", { textContent: fmtPrice(b.price, b.cur) }),
+        el("small", { className: pctClass(b.pct), textContent: fmtPct(b.pct) }));
+    }));
+    if (mk.watch.length && !mk.available) t.append(el("small", { className: "muted", textContent: "Kurse gerade nicht verfügbar" }));
+    const list = $("watch-list");
+    list.replaceChildren(...mk.watch.map((w) => {
+      const b = quoteBits(w);
+      const li = el("li", { className: "watch-row" },
+        el("span", { className: "watch-main" }, el("b", { textContent: w.name || w.symbol }), el("small", { textContent: [w.symbol, w.exchange].filter(Boolean).join(" · ") })),
+        el("span", { className: "watch-quote" }, el("b", { textContent: b.price == null ? (mk.available ? "Kurs nicht verfügbar" : "–") : fmtPrice(b.price, b.cur) }),
+          el("small", { className: pctClass(b.pct), textContent: fmtPct(b.pct) })));
+      longPress(li, async () => {
+        if (!confirm(`„${w.name || w.symbol}" aus der Watchlist entfernen?`)) return;
+        try { await api(`/api/watchlist/${w.id}`, { method: "DELETE" }); } catch (e) { showToast(e.message); }
+        loadMarket(true);
+      });
+      return li;
+    }));
+    if (!mk.watch.length) list.append(el("li", { className: "empty", textContent: "Noch keine Titel. Suche unten nach einer Aktie oder einem ETF." }));
+  }
+
+  function renderBrief() {
+    const b = mk.brief;
+    const text = b ? b.content : mk.briefErr || "Briefing gerade nicht verfügbar.";
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    $("market-teaser").textContent = b ? sentences.slice(0, 2).join(" ") : text;
+    $("mb-text").textContent = text;
+    $("mb-stamp").textContent = !b ? "Briefing" : b.stale ? "Von gestern" : `Stand ${hm(b.created_at)}`;
+    $("mb-note").hidden = !(b && b.stale);
+    $("mb-note").textContent = "Das heutige Briefing konnte gerade nicht erstellt werden. Versuche es später mit „Neu laden“.";
+    const wait = b && !b.stale ? b.created_at + 3600 - Date.now() / 1000 : 0;
+    $("mb-refresh").disabled = wait > 0;
+    $("mb-refresh").textContent = wait > 0 ? `Neu laden ab ${hm(b.created_at + 3600)}` : "Neu laden";
+  }
+
+  $("mb-refresh").addEventListener("click", async () => {
+    $("mb-refresh").disabled = true;
+    $("mb-text").textContent = "Briefing wird erstellt …";
+    try { mk.brief = await api("/api/market/briefing/refresh", { method: "POST" }); mk.briefErr = ""; }
+    catch (e) { showToast(e.message); }
+    renderBrief();
+  });
+
+  // Suche: während des Tippens Vorschläge (nur Titel mit Kursen im kostenlosen Tarif)
+  $("watch-q").addEventListener("input", () => {
+    clearTimeout(mk.searchTimer);
+    const q = $("watch-q").value.trim();
+    if (!q) { $("watch-results").replaceChildren(); return; }
+    mk.searchTimer = setTimeout(async () => {
+      const seq = ++mk.searchSeq;
+      let hits = [];
+      try { hits = await api(`/api/market/search?q=${encodeURIComponent(q)}`); }
+      catch (e) { if (seq === mk.searchSeq) $("watch-results").replaceChildren(el("li", { className: "muted", textContent: e.message })); return; }
+      if (seq !== mk.searchSeq) return; // inzwischen weitergetippt
+      $("watch-results").replaceChildren(...hits.map((h) => {
+        const b = el("button", { type: "button" }, el("b", { textContent: h.name || h.symbol }), el("small", { textContent: ` ${h.symbol} · ${h.exchange}` }));
+        b.addEventListener("click", () => addWatch(h));
+        return el("li", {}, b);
+      }));
+      if (!hits.length) $("watch-results").append(el("li", { className: "muted", textContent: "Nichts gefunden (nur Titel mit kostenlosen Kursen)." }));
+    }, 350);
+  });
+  $("watch-form").addEventListener("submit", (e) => e.preventDefault());
+
+  async function addWatch(h) {
+    $("watch-error").hidden = true;
+    try {
+      await api("/api/watchlist", { method: "POST", body: { symbol: h.symbol, name: h.name, exchange: h.exchange, currency: h.currency } });
+      $("watch-q").value = "";
+      $("watch-results").replaceChildren();
+      showToast(`${h.name || h.symbol} hinzugefügt.`);
+    } catch (e) { $("watch-error").textContent = e.message; $("watch-error").hidden = false; }
+    loadMarket(true);
+  }
+
+  $("market-card").addEventListener("click", () => showTab("market"));
+  $("market-card").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showTab("market"); } });
+  $("market-back").addEventListener("click", () => showTab("today"));
 
   // ---------- Mein Bild (Figur wählen) ----------
   let myAvatar = store.get("avatar", "");
