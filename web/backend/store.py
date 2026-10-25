@@ -132,6 +132,25 @@ class SqliteStore:
             )
             c.execute("CREATE INDEX IF NOT EXISTS idx_timetable_user ON timetable(user_id, weekday, start_time)")
             c.execute(
+                """CREATE TABLE IF NOT EXISTS watchlist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    exchange TEXT NOT NULL DEFAULT '',
+                    currency TEXT NOT NULL DEFAULT '',
+                    position INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(user_id, symbol, exchange))"""
+            )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS market_briefings (
+                    user_id INTEGER NOT NULL,
+                    day TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (user_id, day))"""
+            )
+            c.execute(
                 """CREATE TABLE IF NOT EXISTS friendships (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     requester_id INTEGER NOT NULL,
@@ -309,6 +328,38 @@ class SqliteStore:
     def delete_class(self, user_id, class_id):
         with self._db() as c:
             return c.execute("DELETE FROM timetable WHERE id=? AND user_id=?", (class_id, user_id)).rowcount > 0
+
+    # --- Börse ---
+    def list_watchlist(self, user_id):
+        with self._db() as c:
+            rows = c.execute("SELECT id,symbol,name,exchange,currency,position FROM watchlist WHERE user_id=? ORDER BY position, id", (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_watch(self, user_id, item):
+        try:
+            with self._db() as c:
+                pos = c.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM watchlist WHERE user_id=?", (user_id,)).fetchone()[0]
+                cur = c.execute("INSERT INTO watchlist(user_id,symbol,name,exchange,currency,position) VALUES (?,?,?,?,?,?)",
+                                (user_id, item["symbol"], item["name"], item["exchange"], item["currency"], pos))
+                row = c.execute("SELECT id,symbol,name,exchange,currency,position FROM watchlist WHERE id=?", (cur.lastrowid,)).fetchone()
+        except sqlite3.IntegrityError:
+            return None
+        return dict(row)
+
+    def delete_watch(self, user_id, watch_id):
+        with self._db() as c:
+            return c.execute("DELETE FROM watchlist WHERE id=? AND user_id=?", (watch_id, user_id)).rowcount > 0
+
+    def get_briefing(self, user_id, day):
+        with self._db() as c:
+            row = c.execute("SELECT content,created_at FROM market_briefings WHERE user_id=? AND day=?", (user_id, day)).fetchone()
+        return dict(row) if row else None
+
+    def save_briefing(self, user_id, day, content, created_at):
+        with self._db() as c:
+            c.execute("INSERT INTO market_briefings(user_id,day,content,created_at) VALUES (?,?,?,?) "
+                      "ON CONFLICT(user_id,day) DO UPDATE SET content=excluded.content, created_at=excluded.created_at",
+                      (user_id, day, content, created_at))
 
     # --- Freunde ---
     def get_friendship(self, a, b):
@@ -523,6 +574,36 @@ class SupabaseStore:
         r.raise_for_status()
         return len(r.json())
 
+    # --- Börse ---
+    def list_watchlist(self, user_id):
+        return self._get("watchlist", {"user_id": f"eq.{user_id}", "select": "id,symbol,name,exchange,currency,position",
+                                       "order": "position.asc,id.asc"})
+
+    def add_watch(self, user_id, item):
+        rows = self.list_watchlist(user_id)
+        pos = max((w["position"] for w in rows), default=-1) + 1
+        r = self.http.post("/watchlist", params={"select": "id,symbol,name,exchange,currency,position"},
+                           json={"user_id": user_id, "position": pos, **{k: item[k] for k in ("symbol", "name", "exchange", "currency")}},
+                           headers=self.REP)
+        if r.status_code == 409:  # gibt es schon (eindeutig je Konto, Kürzel und Börse)
+            return None
+        r.raise_for_status()
+        return r.json()[0]
+
+    def delete_watch(self, user_id, watch_id):
+        r = self.http.delete("/watchlist", params={"id": f"eq.{watch_id}", "user_id": f"eq.{user_id}"}, headers=self.REP)
+        r.raise_for_status()
+        return bool(r.json())
+
+    def get_briefing(self, user_id, day):
+        rows = self._get("market_briefings", {"user_id": f"eq.{user_id}", "day": f"eq.{day}", "select": "content,created_at"})
+        return rows[0] if rows else None
+
+    def save_briefing(self, user_id, day, content, created_at):
+        r = self.http.post("/market_briefings", json={"user_id": user_id, "day": day, "content": content, "created_at": created_at},
+                           headers={"Prefer": "resolution=merge-duplicates"})
+        r.raise_for_status()
+
     # --- Freunde ---
     def _pair(self, a_col, b_col, a, b):
         return f"(and({a_col}.eq.{a},{b_col}.eq.{b}),and({a_col}.eq.{b},{b_col}.eq.{a}))"
@@ -614,3 +695,8 @@ delete_friendship = _impl.delete_friendship
 list_friendships = _impl.list_friendships
 get_share = _impl.get_share
 set_share = _impl.set_share
+list_watchlist = _impl.list_watchlist
+add_watch = _impl.add_watch
+delete_watch = _impl.delete_watch
+get_briefing = _impl.get_briefing
+save_briefing = _impl.save_briefing

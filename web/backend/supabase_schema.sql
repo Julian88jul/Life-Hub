@@ -98,3 +98,27 @@ grant all on all sequences in schema public to service_role;
 
 -- ---------- Profilbild (Update: bei bestehendem Projekt ausführen) ----------
 alter table users add column if not exists avatar text not null default '';
+
+-- ---------- Börse (Update: bei bestehendem Projekt ausführen) ----------
+create table if not exists watchlist (
+  id bigint generated always as identity primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  symbol text not null,
+  name text not null default '',
+  exchange text not null default '',
+  currency text not null default '',
+  position int not null default 0,
+  created_at timestamptz not null default now(),
+  unique (user_id, symbol, exchange)
+);
+create table if not exists market_briefings (
+  user_id bigint not null references users(id) on delete cascade,
+  day date not null,
+  content text not null,
+  created_at double precision not null,
+  primary key (user_id, day)
+);
+alter table watchlist enable row level security;
+alter table market_briefings enable row level security;
+grant all on watchlist, market_briefings to service_role;
+grant all on all sequences in schema public to service_role;

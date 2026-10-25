@@ -109,6 +109,30 @@ async def analyze_image(image_b64: str, mime: str, prompt: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+async def market_briefing(prompt: str) -> str:
+    """Börsen-Briefing mit Google-Suche (Grounding); gibt reinen Text zurück."""
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        raise LLMError("GEMINI_API_KEY fehlt.", 503)
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "tools": [{"google_search": {}}],
+            "generationConfig": {"temperature": 0.3}}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp, _ = await asyncio.wait_for(_post_any(client, _model_list(), key, body), timeout=120)
+    except asyncio.TimeoutError:
+        raise LLMError("Das Briefing dauert gerade zu lange.", 504) from None
+    if resp.status_code != 200:
+        raise LLMError(f"Gemini-Fehler ({resp.status_code}).")
+    try:
+        parts = resp.json()["candidates"][0]["content"]["parts"]
+        text = "".join(p.get("text", "") for p in parts).strip()
+    except (KeyError, IndexError, ValueError):
+        raise LLMError("Die Antwort der KI war nicht lesbar.") from None
+    if not text:
+        raise LLMError("Die KI hat kein Briefing geliefert.")
+    return text
+
+
 async def _post_any(client: httpx.AsyncClient, models: list[str], key: str, payload: dict) -> tuple[httpx.Response, str]:
     """Probiert die Modelle nacheinander (je ein Versuch). Bei Überlastung (429/500/503) oder
     Netzwerkfehler geht es mit dem nächsten Modell weiter. Gibt Antwort und genutztes Modell zurück."""
