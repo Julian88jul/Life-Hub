@@ -1583,14 +1583,6 @@
   }
 
   function renderMarket() {
-    const t = $("market-ticker");
-    if (!mk.watch.length) t.replaceChildren(el("span", { className: "muted", textContent: "Füge Aktien hinzu, um ihre Kurse zu sehen." }));
-    else t.replaceChildren(...mk.watch.map((w) => {
-      const b = quoteBits(w);
-      return el("span", { className: "tick" }, el("b", { textContent: w.symbol }), el("span", { textContent: fmtPrice(b.price, b.cur) }),
-        el("small", { className: pctClass(b.pct), textContent: fmtPct(b.pct) }));
-    }));
-    if (mk.watch.length && !mk.available) t.append(el("small", { className: "muted", textContent: "Kurse gerade nicht verfügbar" }));
     const list = $("watch-list");
     list.replaceChildren(...mk.watch.map((w) => {
       const b = quoteBits(w);
@@ -1605,29 +1597,68 @@
       });
       return li;
     }));
-    if (!mk.watch.length) list.append(el("li", { className: "empty", textContent: "Noch keine Titel. Suche unten nach einer Aktie oder einem ETF." }));
+    if (!mk.watch.length) list.append(el("li", { className: "empty", textContent: "Noch keine Titel. Tippe auf „+ Titel“, um Aktien oder ETFs hinzuzufügen." }));
+  }
+
+  const KIND_LABEL = { fed: "Fed", earnings: "Zahlen", data: "Daten", other: "Termin" };
+  const shortDay = (isoDate) => { const d = parseIso(isoDate); return { wd: WEEKDAYS[d.getDay()].slice(0, 2), dm: `${d.getDate()}.${d.getMonth() + 1}.` }; };
+
+  function moverRow(m, compact) {
+    const pill = el("span", { className: `pct-pill ${pctClass(m.change_pct)}`, textContent: fmtPct(m.change_pct) });
+    const main = el("span", { className: "mv-main" }, el("b", { textContent: m.name }));
+    if (!compact && m.reason) main.append(el("small", { textContent: m.reason }));
+    return el("li", { className: "mv-row" }, main, pill);
   }
 
   function renderBrief() {
-    const b = mk.brief;
-    const text = b ? b.content : mk.briefErr || "Briefing gerade nicht verfügbar.";
-    const sentences = text.split(/(?<=[.!?])\s+/);
-    $("market-teaser").textContent = b ? sentences.slice(0, 2).join(" ") : text;
-    $("mb-text").textContent = text;
-    $("mb-stamp").textContent = !b ? "Briefing" : b.stale ? "Von gestern" : `Stand ${hm(b.created_at)}`;
-    $("mb-note").hidden = !(b && b.stale);
+    const r = mk.brief;
+    const b = r && r.brief;
+    const fail = mk.briefErr || "Briefing gerade nicht verfügbar.";
+    // Heute-Karte: Lage, drei Bewegungen, nächster Termin
+    $("mc-lage").textContent = b ? b.lage : fail;
+    $("mc-movers").replaceChildren(...(b ? b.movers.map((m) => moverRow(m, true)) : []));
+    const next = b && b.upcoming[0];
+    $("mc-next").hidden = !next;
+    if (next) { const d = shortDay(next.date); $("mc-next").textContent = `Nächster Termin · ${next.label} · ${d.wd} ${d.dm}`; }
+    // Börsen-Seite
+    $("mb-stamp").textContent = !r ? "" : r.stale ? "Briefing von gestern" : `Stand heute, ${hm(r.created_at)} Uhr`;
+    $("mb-lage").textContent = b ? b.lage : fail;
+    $("mb-note").hidden = !(r && r.stale);
     $("mb-note").textContent = "Das heutige Briefing konnte gerade nicht erstellt werden. Versuche es später mit „Neu laden“.";
-    const wait = b && !b.stale ? b.created_at + 3600 - Date.now() / 1000 : 0;
+    $("mb-movers").replaceChildren(...(b ? b.movers.map((m) => moverRow(m, false)) : []));
+    $("mb-news").replaceChildren(...(b ? b.news.map((n) => el("li", { textContent: n })) : []));
+    $("mb-upcoming").replaceChildren(...(b ? b.upcoming.map((u) => {
+      const d = shortDay(u.date);
+      return el("li", { className: "date-row" },
+        el("span", { className: "date-badge" }, el("small", { textContent: d.wd }), el("b", { textContent: d.dm })),
+        el("span", { className: "date-label", textContent: u.label }),
+        el("span", { className: `kind-tag kind-${u.kind}`, textContent: KIND_LABEL[u.kind] || "Termin" }));
+    }) : []));
+    for (const [id, list] of [["mb-movers", b && b.movers], ["mb-news", b && b.news], ["mb-upcoming", b && b.upcoming]]) {
+      const empty = !list || !list.length;
+      $(id).hidden = empty;
+      $(`${id}-head`).hidden = empty;
+    }
+    const wait = r && !r.stale ? r.created_at + 3600 - Date.now() / 1000 : 0;
     $("mb-refresh").disabled = wait > 0;
-    $("mb-refresh").textContent = wait > 0 ? `Neu laden ab ${hm(b.created_at + 3600)}` : "Neu laden";
+    $("mb-refresh").textContent = wait > 0 ? `Neu ab ${hm(r.created_at + 3600)}` : "Neu laden";
   }
 
   $("mb-refresh").addEventListener("click", async () => {
     $("mb-refresh").disabled = true;
-    $("mb-text").textContent = "Briefing wird erstellt …";
+    $("mb-lage").textContent = "Briefing wird erstellt …";
     try { mk.brief = await api("/api/market/briefing/refresh", { method: "POST" }); mk.briefErr = ""; }
     catch (e) { showToast(e.message); }
     renderBrief();
+  });
+
+  // „+ Titel“ klappt die Suche auf und zu
+  $("watch-add-btn").addEventListener("click", () => {
+    const open = $("watch-add").hidden;
+    $("watch-add").hidden = !open;
+    $("watch-add-btn").setAttribute("aria-expanded", String(open));
+    $("watch-add-btn").textContent = open ? "Fertig" : "+ Titel";
+    if (open) setTimeout(() => $("watch-q").focus(), 50);
   });
 
   // Suche: während des Tippens Vorschläge (nur Titel mit Kursen im kostenlosen Tarif)
