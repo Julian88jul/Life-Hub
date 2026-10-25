@@ -782,6 +782,12 @@ async def market_quotes(uid: int = Depends(current_user)):
         series = await market.series(symbols)
     except market.MarketError:
         series = {}  # Kurven sind nur Beiwerk
+    # Dollar-Kurse zusätzlich in Euro (zum aktuellen Umrechnungskurs)
+    rate = await market.eur_per_usd()
+    if rate:
+        for q in quotes.values():
+            if q.get("currency") == "USD" and q.get("price") is not None:
+                q["price_eur"] = round(q["price"] * rate, 2)
     return {"available": True, "quotes": quotes, "series": series}
 
 

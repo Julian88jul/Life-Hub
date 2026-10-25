@@ -115,3 +115,24 @@ async def series(symbols: list[str], days: int = 30) -> dict[str, list[float]]:
                 _series_cache[s] = (now, closes)
             result[s] = closes
     return result
+
+
+_rate_cache: tuple[float, float] | None = None  # (Zeitpunkt, Euro je Dollar)
+
+
+async def eur_per_usd() -> float | None:
+    """Aktueller Umrechnungskurs (Euro je US-Dollar), 5 Minuten zwischengespeichert."""
+    global _rate_cache
+    now = time.time()
+    if _rate_cache and now - _rate_cache[0] < QUOTE_TTL:
+        return _rate_cache[1]
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{TD_URL}/quote", params={"symbol": "EUR/USD", "apikey": _key()})
+        usd_per_eur = _num(r.json().get("close"))
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return _rate_cache[1] if _rate_cache else None
+    if not usd_per_eur:
+        return _rate_cache[1] if _rate_cache else None
+    _rate_cache = (now, round(1 / usd_per_eur, 6))
+    return _rate_cache[1]

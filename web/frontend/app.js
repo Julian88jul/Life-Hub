@@ -1307,6 +1307,8 @@
     $("import-sheet").reset();
     setImpMode(mode || "events");
     $("imp-mode").hidden = !!mode; // Auswahl nur, wenn das Bild von einer anderen Seite kommt
+    impTextMode = false;
+    $("imp-textbox").hidden = true;
     $("imp-select").hidden = false;
     $("imp-review").hidden = true;
     $("imp-error").hidden = true;
@@ -1318,6 +1320,68 @@
     $("import-sheet").hidden = false;
   }
   $("plan-import").addEventListener("click", () => openImport("timetable"));
+
+  // ---------- Termine aus Text (eingefügt oder per iPhone-Kurzbefehl übergeben) ----------
+  let impTextMode = false;
+  function openImportText(prefill = "", auto = false) {
+    openImport("events");
+    impTextMode = true;
+    $("imp-title").textContent = "Termine aus Text";
+    $("imp-lead").textContent = "Füge Text mit Terminen ein, z. B. aus einer E-Mail oder Nachricht. Die KI schlägt die Termine vor, du bestätigst.";
+    $("imp-select").hidden = true;
+    $("imp-textbox").hidden = false;
+    $("imp-text").value = prefill;
+    $("imp-submit").disabled = !prefill.trim();
+    if (auto && prefill.trim()) analyzeText();
+    else setTimeout(() => $("imp-text").focus(), 50);
+  }
+  $("cal-text").addEventListener("click", () => openImportText());
+  $("imp-text").addEventListener("input", () => { if (!impResult) $("imp-submit").disabled = !$("imp-text").value.trim(); });
+  $("imp-paste").addEventListener("click", async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (t) { $("imp-text").value = t.slice(0, 5000); $("imp-submit").disabled = false; }
+    } catch { showToast("Einfügen nicht erlaubt. Halte im Feld gedrückt und wähle „Einsetzen“."); }
+  });
+
+  async function analyzeText() {
+    const session = ++impSession;
+    const text = $("imp-text").value.trim();
+    if (!text) return;
+    $("imp-error").hidden = true;
+    $("imp-submit").disabled = true;
+    $("imp-status").textContent = "KI liest den Text …";
+    try {
+      const res = await api("/api/import/text", { method: "POST", body: { text } });
+      if (session !== impSession) return;
+      $("imp-status").textContent = "";
+      if (!res.events.length) {
+        $("imp-error").textContent = "In diesem Text wurde kein Termin erkannt.";
+        $("imp-error").hidden = false;
+        $("imp-submit").disabled = false;
+        return;
+      }
+      $("imp-textbox").hidden = true;
+      showReview(res, res.remarks);
+    } catch (e) {
+      if (session !== impSession) return;
+      $("imp-status").textContent = "";
+      $("imp-error").textContent = e.message;
+      $("imp-error").hidden = false;
+      $("imp-submit").disabled = false;
+    }
+  }
+
+  // Vom Kurzbefehl übergebener Text (#text=… wird nie an den Server geschickt)
+  function takeSharedText() {
+    const m = location.hash.match(/^#text=([\s\S]*)$/);
+    if (!m) return;
+    let text = m[1];
+    try { text = decodeURIComponent(text); } catch { /* schon lesbar */ }
+    window.history.replaceState(null, "", location.pathname + location.search);
+    if (text.trim()) { showTab("calendar"); openImportText(text.slice(0, 5000), true); }
+  }
+  $("shortcut-url").textContent = `${location.origin}${location.pathname}#text=`;
   $("cal-import").addEventListener("click", () => openImport("events"));
   $("imp-cancel").addEventListener("click", closeSheet);
 
@@ -1545,7 +1609,7 @@
 
   $("import-sheet").addEventListener("submit", (e) => {
     e.preventDefault();
-    if (impResult) commitImport(); else if (impFiles.length) analyzeImages();
+    if (impResult) commitImport(); else if (impTextMode) analyzeText(); else if (impFiles.length) analyzeImages();
   });
 
   // ---------- Börse ----------
@@ -1608,7 +1672,9 @@
 
   function quoteBits(w) {
     const q = mk.quotes[w.symbol] || {};
-    return { price: q.error ? null : q.price, pct: q.error ? null : q.change_pct, cur: q.currency || w.currency };
+    if (q.error) return { price: null, pct: null, cur: w.currency };
+    // Dollar-Kurse in Euro anzeigen (vom Server umgerechnet)
+    return q.price_eur != null ? { price: q.price_eur, pct: q.change_pct, cur: "EUR" } : { price: q.price, pct: q.change_pct, cur: q.currency || w.currency };
   }
 
   function renderMarket() {
@@ -2142,14 +2208,11 @@
     history.forEach((m) => addBubble(m.role, m.content));
   }
 
-  $("chat-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const input = $("chat-input");
-    const text = input.value.trim();
+  async function sendChat(text, spoken = false) {
+    text = text.trim();
     if (!text) return;
-    input.value = "";
     history.push({ role: "user", content: text });
-    addBubble("user", text);
+    addBubble("user", spoken ? `🎙 ${text}` : text);
     const pending = addBubble("assistant", "…", "pending");
     $("chat-send").disabled = true;
     try {
@@ -2159,15 +2222,100 @@
       addBubble("assistant", res.reply);
       store.set("chat", history.slice(-40));
       if ((res.events_created && res.events_created.length) || res.tasks_changed) refreshData();
+      if (spoken) speak(plainText(res.reply));
     } catch (err) {
       pending.remove();
       history.pop(); // fehlgeschlagene Nachricht nicht in den Verlauf übernehmen
       addBubble("error", err.message);
     } finally {
       $("chat-send").disabled = false;
-      input.focus();
     }
+  }
+
+  $("chat-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("chat-input");
+    const text = input.value;
+    input.value = "";
+    sendChat(text).then(() => input.focus());
   });
+
+  // ---------- Sprache: Aufnahme (antippen = starten, nochmal = senden) und Vorlesen ----------
+  const voice = { rec: null, stream: null, chunks: [], timer: null, started: 0, busy: false };
+  const VOICE_MAX_S = 60;
+  let speakOn = store.get("speak", true);
+
+  function renderSpeakToggle() {
+    $("speak-toggle").textContent = speakOn ? "🔊 Vorlesen an" : "🔇 Vorlesen aus";
+    $("speak-toggle").setAttribute("aria-pressed", String(speakOn));
+  }
+  $("speak-toggle").addEventListener("click", () => { speakOn = !speakOn; store.set("speak", speakOn); if (!speakOn) speechSynthesis.cancel(); renderSpeakToggle(); });
+  renderSpeakToggle();
+
+  function speak(text) {
+    if (!speakOn || !("speechSynthesis" in window) || !text) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text.slice(0, 1200));
+    u.lang = "de-DE";
+    const de = speechSynthesis.getVoices().find((v) => v.lang && v.lang.startsWith("de"));
+    if (de) u.voice = de;
+    speechSynthesis.speak(u);
+  }
+
+  function setRecUi(on) {
+    $("rec-bar").hidden = !on;
+    $("chat-mic").classList.toggle("on", on);
+    $("voice-hero").classList.toggle("on", on);
+    $("chat-mic").ariaLabel = on ? "Aufnahme senden" : "Sprechen";
+  }
+
+  async function toggleVoice() {
+    if (voice.busy) return;
+    if (voice.rec) { voice.rec.stop(); return; }
+    // iPhone: Vorlesen muss einmal durch ein Antippen freigeschaltet werden
+    if ("speechSynthesis" in window) { const u = new SpeechSynthesisUtterance(""); speechSynthesis.speak(u); }
+    if (!navigator.mediaDevices || !window.MediaRecorder) { showToast("Dieses Gerät unterstützt keine Sprachaufnahme im Browser."); return; }
+    try { voice.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { showToast("Kein Zugriff auf das Mikrofon. Bitte in den Einstellungen erlauben."); return; }
+    const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    voice.rec = new MediaRecorder(voice.stream, type ? { mimeType: type } : undefined);
+    voice.chunks = [];
+    voice.rec.ondataavailable = (e) => { if (e.data && e.data.size) voice.chunks.push(e.data); };
+    voice.rec.onstop = finishVoice;
+    voice.rec.start();
+    voice.started = Date.now();
+    setRecUi(true);
+    $("rec-time").textContent = "0:00";
+    voice.timer = setInterval(() => {
+      const sec = Math.floor((Date.now() - voice.started) / 1000);
+      $("rec-time").textContent = `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
+      if (sec >= VOICE_MAX_S && voice.rec && voice.rec.state === "recording") voice.rec.stop();
+    }, 250);
+  }
+
+  async function finishVoice() {
+    clearInterval(voice.timer);
+    const mime = (voice.rec && voice.rec.mimeType) || "audio/mp4";
+    voice.stream.getTracks().forEach((t) => t.stop());
+    voice.rec = null;
+    setRecUi(false);
+    const blob = new Blob(voice.chunks, { type: mime });
+    if (blob.size < 1000) { showToast("Die Aufnahme war zu kurz."); return; }
+    voice.busy = true;
+    const pending = addBubble("assistant", "Ich höre mir das an …", "pending");
+    try {
+      const audio = await blobToBase64(blob);
+      const res = await api("/api/transcribe", { method: "POST", body: { audio, mime: mime.split(";")[0] } });
+      pending.remove();
+      await sendChat(res.text, true);
+    } catch (e) {
+      pending.remove();
+      addBubble("error", e.message);
+    } finally { voice.busy = false; }
+  }
+
+  $("chat-mic").addEventListener("click", toggleVoice);
+  $("voice-hero").addEventListener("click", () => { showTab("chat"); toggleVoice(); });
 
   // ---------- Start ----------
   async function startApp() {
@@ -2179,6 +2327,7 @@
     renderHistory();
     showTab(store.get("tab", "today"));
     loadFriends();
+    takeSharedText();
     checkHealth();
     try {
       const me = await api("/api/auth/me");

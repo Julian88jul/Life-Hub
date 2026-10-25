@@ -229,6 +229,11 @@ with TestClient(main.app) as c:
 
     main.market.search, main.market.quotes, main.llm.market_briefing = fake_search, fake_quotes, fake_brief
     main.market.series = fake_series
+
+    async def fake_rate():
+        return 0.9  # Euro je Dollar
+
+    main.market.eur_per_usd = fake_rate
     main.market.configured = lambda: True
     check("Watchlist anfangs leer", c.get("/api/watchlist", headers=H).json() == [])
     check("Suche ohne Login gesperrt", c.get("/api/market/search?q=apple").status_code == 401)
@@ -243,6 +248,7 @@ with TestClient(main.app) as c:
     check("Fremden Titel löschen verboten", c.delete(f"/api/watchlist/{wid}", headers=HO).status_code == 404)
     q1 = c.get("/api/market/quotes", headers=H).json()
     check("Kurse für Watchlist", q1["available"] is True and q1["quotes"]["AAPL"]["change_pct"] == 1.25)
+    check("Dollar-Kurs in Euro umgerechnet", q1["quotes"]["AAPL"]["price_eur"] == 90.45)
     check("Kurven für Watchlist", len(q1["series"]["AAPL"]) == 30)
     ov = c.get("/api/market/overview", headers=H).json()
     check("Index-Überblick", ov["available"] is True and [i["name"] for i in ov["indices"]] == ["S&P 500", "Nasdaq", "Dow Jones"])
