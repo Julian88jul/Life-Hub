@@ -194,12 +194,33 @@ with TestClient(main.app) as c:
         calls["quotes"] += 1
         return {s: {"price": 100.5, "change_pct": 1.25, "currency": "USD"} for s in symbols}
 
+    import json as _json
+    from datetime import timedelta as _td
+
+    def brief_json(lage, today):
+        d = lambda n: (today + _td(days=n)).isoformat()
+        return _json.dumps({
+            "lage": lage,
+            "movers": [{"name": "Nvidia", "symbol": "NVDA", "change_pct": -4.8, "reason": "Sorge um Exportregeln"},
+                       {"name": "Tesla", "symbol": "TSLA", "change_pct": 6.1, "reason": "Starke Quartalszahlen"},
+                       {"name": "Apple", "symbol": "AAPL", "change_pct": 1.2, "reason": "Neues iPhone"},
+                       {"name": "Zuviel", "symbol": "ZZ", "change_pct": 2.0, "reason": "vierter Eintrag"}],
+            "news": ["Trump kündigt neue Zölle an.", "Fed-Protokoll zeigt Uneinigkeit.", "Microsoft übertrifft Erwartungen.", "Ölpreis steigt.", "fünfte News"],
+            "upcoming": [{"date": d(5), "label": "Fed-Zinsentscheid", "kind": "fed"},
+                         {"date": d(1), "label": "Quartalszahlen Apple", "kind": "earnings"},
+                         {"date": d(-2), "label": "Vergangen", "kind": "data"},
+                         {"date": d(40), "label": "Zu weit weg", "kind": "data"},
+                         {"date": "kaputt", "label": "Ungültig", "kind": "data"}],
+        })
+
     async def fake_brief(prompt):
         calls["brief"] += 1
         calls["prompt"] = prompt
         if calls["fail"]:
             raise main.llm.LLMError("Suche gerade nicht erreichbar.")
-        return f"Briefing Nummer {calls['brief']}."
+        if calls.get("bad"):
+            return "Das ist leider kein JSON."
+        return "```json\n" + brief_json(f"Lage Nummer {calls['brief']}.", main.berlin_today()) + "\n```"
 
     main.market.search, main.market.quotes, main.llm.market_briefing = fake_search, fake_quotes, fake_brief
     main.market.configured = lambda: True
@@ -223,27 +244,38 @@ with TestClient(main.app) as c:
         c.post("/api/watchlist", json={**w, "symbol": f"T{i}"}, headers=H)
     check("Höchstens 15 Titel", c.post("/api/watchlist", json={**w, "symbol": "ZZZ"}, headers=H).status_code == 400)
     b1 = c.get("/api/market/briefing", headers=H).json()
-    check("Briefing wird erstellt", b1["content"] == "Briefing Nummer 1." and calls["brief"] == 1 and b1["stale"] is False)
+    br = b1["brief"]
+    check("Briefing wird erstellt", br["lage"] == "Lage Nummer 1." and calls["brief"] == 1 and b1["stale"] is False)
+    check("Höchstens 3 Bewegungen", [m["symbol"] for m in br["movers"]] == ["NVDA", "TSLA", "AAPL"] and br["movers"][0]["change_pct"] == -4.8)
+    check("Höchstens 4 News", len(br["news"]) == 4)
+    check("Termine gefiltert und sortiert", [u["label"] for u in br["upcoming"]] == ["Quartalszahlen Apple", "Fed-Zinsentscheid"])
     check("Auftrag nennt Watchlist", "Apple Inc" in calls["prompt"])
     check("Auftrag verbietet Empfehlungen", "keine kauf" in calls["prompt"].lower())
-    check("Zweiter Abruf am selben Tag ohne KI", c.get("/api/market/briefing", headers=H).json()["content"] == "Briefing Nummer 1." and calls["brief"] == 1)
+    check("Auftrag: USA, Quartalszahlen, Fed", all(w in calls["prompt"] for w in ("USA", "Quartalszahlen", "Fed")))
+    check("Zweiter Abruf am selben Tag ohne KI", c.get("/api/market/briefing", headers=H).json()["brief"]["lage"] == "Lage Nummer 1." and calls["brief"] == 1)
     check("Neu laden innerhalb einer Stunde gesperrt", c.post("/api/market/briefing/refresh", headers=H).status_code == 429)
     today = main.berlin_today().isoformat()
     uid_anna = main.auth.verify_token(token)
-    main.store.save_briefing(uid_anna, today, "Alt", _t.time() - 3700)
+    alt = brief_json("Alt", main.berlin_today())
+    main.store.save_briefing(uid_anna, today, alt, _t.time() - 3700)
     rb = c.post("/api/market/briefing/refresh", headers=H)
-    check("Neu laden nach einer Stunde", rb.status_code == 200 and rb.json()["content"] == "Briefing Nummer 2.")
-    main.store.save_briefing(uid_anna, today, "Alt", _t.time() - 3700)
+    check("Neu laden nach einer Stunde", rb.status_code == 200 and rb.json()["brief"]["lage"] == "Lage Nummer 2.")
+    main.store.save_briefing(uid_anna, today, alt, _t.time() - 3700)
+    calls["bad"] = True
+    check("Unlesbare KI-Antwort: 503", c.post("/api/market/briefing/refresh", headers=H).status_code == 503)
+    calls["bad"] = False
     calls["fail"] = True
     check("KI-Fehler beim Neu laden: 503", c.post("/api/market/briefing/refresh", headers=H).status_code == 503)
-    check("Altes Briefing bleibt erhalten", main.store.get_briefing(uid_anna, today)["content"] == "Alt")
+    check("Altes Briefing bleibt erhalten", _json.loads(main.store.get_briefing(uid_anna, today)["content"])["lage"] == "Alt")
     bo = c.get("/api/market/briefing", headers=HO)
     check("Ohne früheres Briefing: 503", bo.status_code == 503)
-    from datetime import timedelta as _td
-    main.store.save_briefing(main.auth.verify_token(other), (main.berlin_today() - _td(days=1)).isoformat(), "Gestern", _t.time() - 90000)
+    main.store.save_briefing(main.auth.verify_token(other), (main.berlin_today() - _td(days=1)).isoformat(), brief_json("Gestern", main.berlin_today()), _t.time() - 90000)
     bs = c.get("/api/market/briefing", headers=HO).json()
-    check("KI-Fehler: Briefing vom Vortag mit Hinweis", bs["content"] == "Gestern" and bs["stale"] is True)
+    check("KI-Fehler: Briefing vom Vortag mit Hinweis", bs["brief"]["lage"] == "Gestern" and bs["stale"] is True)
     calls["fail"] = False
+    main.store.save_briefing(main.auth.verify_token(other), today, "Altes Textformat ohne JSON", _t.time())
+    bn = c.get("/api/market/briefing", headers=HO).json()
+    check("Altes Textformat wird neu erstellt", bn["brief"]["lage"].startswith("Lage Nummer") and bn["stale"] is False)
     check("Titel löschen", c.delete(f"/api/watchlist/{wid}", headers=H).status_code == 200)
 
     print("Bild-Import (KI-Antwort simuliert)")
