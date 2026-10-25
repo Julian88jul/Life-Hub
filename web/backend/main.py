@@ -535,6 +535,62 @@ async def import_analyze(body: ImportAnalyzeIn, uid: int = Depends(current_user)
     return _clean_import(data, body.mode)
 
 
+TEXT_IMPORT_PROMPT_HEAD = "Du liest ein Bild (Screenshot oder Foto, z. B. aus einem Vorlesungsskript, Stundenplan oder einer Prüfungsübersicht). "
+
+
+class ImportTextIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+
+    @model_validator(mode="after")
+    def check(self):
+        if not self.text.strip():
+            raise ValueError("Der Text ist leer.")
+        return self
+
+
+@app.post("/api/import/text")
+async def import_text(body: ImportTextIn, uid: int = Depends(current_user)):
+    """Termine aus eingefügtem Text (Mail, Nachricht) vorschlagen; nur Termine, kein Stundenplan."""
+    _check_import_rate(uid)
+    prompt = import_prompt("events").replace(TEXT_IMPORT_PROMPT_HEAD, "Du liest einen Text (z. B. eine E-Mail, Nachricht oder Webseite). ")
+    prompt = prompt.replace("im Bild", "im Text").replace("Bildinhalt", "Textinhalt")
+    try:
+        data = await llm.analyze_text(body.text.strip(), prompt)
+    except llm.LLMError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+    return _clean_import(data, "events")
+
+
+# ---------- Sprache zu Text ----------
+VOICE_LIMIT, VOICE_WINDOW = 60, 3600
+_voice_calls: dict[int, list[float]] = {}
+
+
+class TranscribeIn(BaseModel):
+    audio: str = Field(min_length=100, max_length=6_000_000)  # Base64, ca. 60 Sekunden
+    mime: str = Field(pattern=r"^audio/(mp4|m4a|x-m4a|aac|webm|ogg|mpeg|wav)(;.*)?$")
+
+
+@app.post("/api/transcribe")
+async def transcribe(body: TranscribeIn, uid: int = Depends(current_user)):
+    now = time.time()
+    recent = [t for t in _voice_calls.get(uid, []) if now - t < VOICE_WINDOW]
+    if len(recent) >= VOICE_LIMIT:
+        raise HTTPException(429, "Zu viele Sprachaufnahmen in kurzer Zeit. Bitte später nochmal.")
+    _voice_calls[uid] = recent + [now]
+    try:
+        base64.b64decode(body.audio, validate=True)
+    except Exception:
+        raise HTTPException(422, "Die Aufnahme ist beschädigt.") from None
+    try:
+        text = (await llm.transcribe(body.audio, body.mime.split(";")[0])).strip()
+    except llm.LLMError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+    if not text:
+        raise HTTPException(422, "Ich habe nichts verstanden. Bitte nochmal sprechen.")
+    return {"text": text[:2000]}
+
+
 @app.post("/api/import/commit", status_code=201)
 def import_commit(body: ImportCommitIn, uid: int = Depends(current_user)):
     events = [store.create_event(uid, e.model_dump()) for e in body.events]
