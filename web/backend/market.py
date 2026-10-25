@@ -79,3 +79,39 @@ async def quotes(symbols: list[str]) -> dict[str, dict]:
                 _quote_cache[s] = (now, entry)
             result[s] = entry
     return result
+
+
+SERIES_TTL = 3600  # Kurven ändern sich langsam; spart Kontingent
+_series_cache: dict[str, tuple[float, list[float]]] = {}
+
+
+async def series(symbols: list[str], days: int = 30) -> dict[str, list[float]]:
+    """Schlusskurse der letzten `days` Handelstage je Kürzel, älteste zuerst (fehlt etwas: leere Liste)."""
+    now = time.time()
+    result, missing = {}, []
+    for s in symbols:
+        hit = _series_cache.get(s)
+        if hit and now - hit[0] < SERIES_TTL:
+            result[s] = hit[1]
+        else:
+            missing.append(s)
+    if missing:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(f"{TD_URL}/time_series", params={"symbol": ",".join(missing), "interval": "1day", "outputsize": days, "apikey": _key()})
+            data = r.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise MarketError("Kursverläufe gerade nicht erreichbar.") from exc
+        per = {missing[0]: data} if len(missing) == 1 else data
+        for s in missing:
+            d = per.get(s) if isinstance(per, dict) else None
+            values = d.get("values") if isinstance(d, dict) else None
+            closes = []
+            for v in reversed(values or []):  # Twelve Data liefert die neuesten zuerst
+                n = _num(v.get("close"))
+                if n is not None:
+                    closes.append(n)
+            if closes:
+                _series_cache[s] = (now, closes)
+            result[s] = closes
+    return result

@@ -205,7 +205,9 @@ with TestClient(main.app) as c:
                        {"name": "Tesla", "symbol": "TSLA", "change_pct": 6.1, "reason": "Starke Quartalszahlen"},
                        {"name": "Apple", "symbol": "AAPL", "change_pct": 1.2, "reason": "Neues iPhone"},
                        {"name": "Zuviel", "symbol": "ZZ", "change_pct": 2.0, "reason": "vierter Eintrag"}],
-            "news": ["Trump kündigt neue Zölle an.", "Fed-Protokoll zeigt Uneinigkeit.", "Microsoft übertrifft Erwartungen.", "Ölpreis steigt.", "fünfte News"],
+            "stimmung": -1,
+            "news": [{"text": "Trump kündigt neue Zölle an.", "cat": "politik"}, {"text": "Fed-Protokoll zeigt Uneinigkeit.", "cat": "fed"},
+                     {"text": "Microsoft übertrifft Erwartungen.", "cat": "zahlen"}, {"text": "Ölpreis steigt.", "cat": "quatsch"}, {"text": "fünfte News", "cat": "politik"}],
             "upcoming": [{"date": d(5), "label": "Fed-Zinsentscheid", "kind": "fed"},
                          {"date": d(1), "label": "Quartalszahlen Apple", "kind": "earnings"},
                          {"date": d(-2), "label": "Vergangen", "kind": "data"},
@@ -222,7 +224,11 @@ with TestClient(main.app) as c:
             return "Das ist leider kein JSON."
         return "```json\n" + brief_json(f"Lage Nummer {calls['brief']}.", main.berlin_today()) + "\n```"
 
+    async def fake_series(symbols):
+        return {s: [100.0 + i for i in range(30)] for s in symbols}
+
     main.market.search, main.market.quotes, main.llm.market_briefing = fake_search, fake_quotes, fake_brief
+    main.market.series = fake_series
     main.market.configured = lambda: True
     check("Watchlist anfangs leer", c.get("/api/watchlist", headers=H).json() == [])
     check("Suche ohne Login gesperrt", c.get("/api/market/search?q=apple").status_code == 401)
@@ -237,6 +243,11 @@ with TestClient(main.app) as c:
     check("Fremden Titel löschen verboten", c.delete(f"/api/watchlist/{wid}", headers=HO).status_code == 404)
     q1 = c.get("/api/market/quotes", headers=H).json()
     check("Kurse für Watchlist", q1["available"] is True and q1["quotes"]["AAPL"]["change_pct"] == 1.25)
+    check("Kurven für Watchlist", len(q1["series"]["AAPL"]) == 30)
+    ov = c.get("/api/market/overview", headers=H).json()
+    check("Index-Überblick", ov["available"] is True and [i["name"] for i in ov["indices"]] == ["S&P 500", "Nasdaq", "Dow Jones"])
+    check("Index mit Änderung und Kurve", ov["indices"][0]["change_pct"] == 1.25 and len(ov["indices"][0]["series"]) == 30)
+    check("Überblick ohne Login gesperrt", c.get("/api/market/overview").status_code == 401)
     main.market.configured = lambda: False
     check("Ohne Kurs-Schlüssel: nicht verfügbar", c.get("/api/market/quotes", headers=H).json()["available"] is False)
     main.market.configured = lambda: True
@@ -248,6 +259,10 @@ with TestClient(main.app) as c:
     check("Briefing wird erstellt", br["lage"] == "Lage Nummer 1." and calls["brief"] == 1 and b1["stale"] is False)
     check("Höchstens 3 Bewegungen", [m["symbol"] for m in br["movers"]] == ["NVDA", "TSLA", "AAPL"] and br["movers"][0]["change_pct"] == -4.8)
     check("Höchstens 4 News", len(br["news"]) == 4)
+    check("News mit Kategorie", br["news"][0] == {"text": "Trump kündigt neue Zölle an.", "cat": "politik"} and br["news"][3]["cat"] == "sonstiges")
+    check("Stimmung", br["stimmung"] == -1)
+    pb = main.parse_briefing('{"lage": "x", "stimmung": 9, "news": ["nur Text"]}', main.berlin_today())
+    check("Stimmung begrenzt, News als Text erlaubt", pb["stimmung"] == 2 and pb["news"] == [{"text": "nur Text", "cat": "sonstiges"}])
     check("Termine gefiltert und sortiert", [u["label"] for u in br["upcoming"]] == ["Quartalszahlen Apple", "Fed-Zinsentscheid"])
     check("Auftrag nennt Watchlist", "Apple Inc" in calls["prompt"])
     check("Auftrag verbietet Empfehlungen", "keine kauf" in calls["prompt"].lower())
