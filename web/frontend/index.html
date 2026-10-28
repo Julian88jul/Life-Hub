@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=32">
+  <link rel="stylesheet" href="style.css?v=33">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -218,7 +218,7 @@
         </header>
         <div class="progress" aria-hidden="true"><div class="bar" id="td-bar"></div></div>
         <p class="muted" id="td-count"></p>
-        <p class="hint" id="td-hint">Aufgabe gedrückt halten zum Löschen, antippen zum Bearbeiten.</p>
+        <p class="hint" id="td-hint">Nach rechts wischen zum Abhaken, nach links zum Löschen, antippen zum Bearbeiten.</p>
         <p class="muted empty-tasks" id="td-empty" hidden>Noch nichts hier. Tippe unten auf „Aufgabe“.</p>
         <ul class="task-list" id="task-open"></ul>
         <div class="row-between done-head" id="done-head" hidden>
@@ -532,8 +532,8 @@
     <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
   </form>
 
-  <script src="avatars.js?v=32"></script>
-  <script src="config.js?v=32"></script>
-  <script src="app.js?v=32"></script>
+  <script src="avatars.js?v=33"></script>
+  <script src="config.js?v=33"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>

@@ -1057,3 +1057,62 @@ body::before {
 .shortcut-help ol { margin: 10px 0 6px; padding-left: 20px; font-size: 14px; line-height: 1.55; }
 .shortcut-help li { margin-bottom: 4px; }
 .shortcut-help code { font-size: 12px; overflow-wrap: anywhere; background: var(--surface-2); padding: 1px 5px; border-radius: 6px; }
+
+/* ---------- iOS: Übergänge und Gesten ---------- */
+:root { --row-bg: #15161b; --ios-ease: cubic-bezier(.32, .72, 0, 1); }
+:root[data-theme="light"] { --row-bg: #f9fafc; }
+html, body { overscroll-behavior-y: none; }
+
+/* Wischen auf Zeilen */
+.swipe-row { position: relative; overflow: hidden; touch-action: pan-y; }
+li.task.swipe-row, .event-list li.swipe-row { display: block; padding: 0; min-height: 0; gap: 0; }
+.swipe-content { position: relative; z-index: 1; display: flex; align-items: center; width: 100%; background: var(--row-bg); will-change: transform; }
+li.task.swipe-row > .swipe-content { gap: 10px; padding: 8px 4px; min-height: 68px; }
+.task-list li.task.swipe-row > .swipe-content { padding-left: 10px; padding-right: 4px; }
+.event-list li.swipe-row > .swipe-content { gap: 12px; padding: 10px 0; min-height: 48px; }
+.swipe-act {
+  position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 20px; border: 0;
+  color: #fff; font-weight: 700; font-size: 15px; opacity: 0; transition: opacity .15s;
+}
+.swipe-act.left { right: 0; justify-content: flex-end; min-width: 92px; }
+.swipe-act.right { left: 0; right: 0; justify-content: flex-start; }
+.swipe-act.danger { background: #ff3b30; }
+.swipe-act.done { background: #34c759; }
+
+/* Dialog offen: Seite dahinter wird zur Karte */
+#app { transition: transform .45s var(--ios-ease), border-radius .45s var(--ios-ease), filter .45s var(--ios-ease); transform-origin: 50% 0; }
+body.sheet-open #app { transform: scale(.94) translateY(10px); border-radius: 22px; filter: brightness(.75); overflow: hidden; }
+body.sheet-open .tabbar { opacity: .4; transition: opacity .3s; }
+.sheet { animation: sheetUp .5s var(--ios-ease); }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+.backdrop { animation: fadeIn .3s ease-out; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Vom Rand zurückwischen */
+.edge-dragging { box-shadow: -18px 0 40px rgba(0, 0, 0, .45); }
+
+/* Umschalter mit gleitendem Hintergrund */
+.seg.has-thumb { position: relative; }
+.seg.has-thumb > button { position: relative; z-index: 1; background: transparent !important; box-shadow: none !important; }
+.seg-thumb {
+  position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 11px; background: var(--surface-2);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .25), inset 0 0 0 1px var(--line-strong); pointer-events: none;
+}
+.seg-thumb.ready { transition: transform .38s var(--ios-ease), width .38s var(--ios-ease), opacity .2s; }
+
+/* Nach unten ziehen zum Aktualisieren */
+.ptr {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 6px); z-index: 30; width: 36px; height: 36px;
+  border-radius: 50%; background: var(--surface-solid); border: 1px solid var(--line-strong); display: grid; place-items: center;
+  transform: translate(-50%, -52px); opacity: 0; pointer-events: none; box-shadow: var(--shadow-sm);
+}
+.ptr svg { width: 18px; height: 18px; fill: none; stroke: var(--muted); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.ptr.ready svg { stroke: var(--accent); }
+.ptr.spinning svg { stroke: var(--accent); animation: ptrSpin .8s linear infinite; }
+@keyframes ptrSpin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  #app, .seg-thumb.ready { transition: none; }
+  .sheet, .backdrop { animation: none; }
+  body.sheet-open #app { transform: none; filter: none; }
+}

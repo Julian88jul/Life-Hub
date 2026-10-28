@@ -113,7 +113,26 @@
   applyTheme(currentTheme(), false);
 
   // ---------- Tabs ----------
-  function showTab(name) {
+  // ---------- Bewegung: Übergänge wie in iOS ----------
+  const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const IOS_EASE = "cubic-bezier(.32, .72, 0, 1)";
+  const SUB_PARENT = { market: "today", friends: "today", friend: "friends" }; // Unterseiten und wohin „zurück“ führt
+  let currentView = null;
+
+  // push = Seite kommt von rechts, pop = zurück (kommt von links), fade = Tab-Wechsel
+  function animateIn(node, kind) {
+    if (!node || !kind || reduceMotion() || !node.animate) return;
+    const frames = kind === "push" ? [{ transform: "translateX(30%)", opacity: 0 }, { transform: "none", opacity: 1 }]
+      : kind === "pop" ? [{ transform: "translateX(-14%)", opacity: 0 }, { transform: "none", opacity: 1 }]
+      : [{ opacity: 0, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }];
+    node.animate(frames, { duration: kind === "fade" ? 240 : 420, easing: IOS_EASE });
+  }
+
+  function showTab(name, opts = {}) {
+    const prev = currentView;
+    currentView = name;
+    const kind = !prev || prev === name || opts.animate === false ? null
+      : SUB_PARENT[name] && SUB_PARENT[prev] !== name ? "push" : SUB_PARENT[prev] ? "pop" : "fade";
     document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
     document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     if (name === "today") renderToday();
@@ -126,6 +145,8 @@
     if (name === "friends") { renderFriends(); loadFriends(); }
     if (name === "market") { loadMarket(true); loadBriefing(); }
     if (!["friends", "friend", "market"].includes(name)) store.set("tab", name); // Unterseiten nicht als Start-Tab merken
+    if (kind === "push" || kind === "pop") window.scrollTo(0, 0);
+    animateIn($(`view-${name}`), opts.kind || kind);
   }
   document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.querySelectorAll("[data-goto]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.goto)));
@@ -158,7 +179,9 @@
     });
     const color = el("span", { className: "event-color" });
     color.style.setProperty("--c", ev.color || DEFAULT_COLOR);
-    return el("li", {}, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main, del);
+    const li = el("li", {}, color, el("span", { className: "event-time", textContent: timeLabel(ev, day) }), main, del);
+    swipeRow(li, { left: { label: "Löschen", cls: "danger", run: () => del.click() } });
+    return li;
   }
 
   // ---------- Aufgaben-Zeile (überall gleich: Heute, Kalender, Listen) ----------
@@ -222,7 +245,68 @@
       li.append(del);
       longPress(li, () => { if (confirm(`„${t.title}" löschen?`)) opts.onDelete(t, li); }, ".check");
     }
+    swipeRow(li, {
+      right: opts.onToggle && !opts.readOnly ? { label: t.done ? "Offen" : "Erledigt", cls: "done", run: () => opts.onToggle(t, li) } : null,
+      left: opts.onDelete ? { label: "Löschen", cls: "danger", run: () => opts.onDelete(t, li) } : null,
+    });
     return li;
+  }
+
+  // ---------- Wischen auf Listen-Einträgen (wie in Mail) ----------
+  const SWIPE_OPEN = 92;
+  let openSwipe = null; // aufgeklappte Zeile (nur eine zur Zeit)
+  function swipeRow(li, { left = null, right = null } = {}) {
+    if (!left && !right) return;
+    const content = el("div", { className: "swipe-content" });
+    content.append(...li.childNodes);
+    li.classList.add("swipe-row");
+    const btnL = left ? el("button", { type: "button", className: `swipe-act left ${left.cls}`, textContent: left.label }) : null;
+    const bgR = right ? el("div", { className: `swipe-act right ${right.cls}`, textContent: right.label }) : null;
+    li.append(...[bgR, btnL].filter(Boolean), content);
+    let s = null, offset = 0, swallowClick = false;
+    const setX = (x, animate) => {
+      offset = x;
+      content.style.transition = animate ? `transform .32s ${IOS_EASE}` : "none";
+      content.style.transform = x ? `translateX(${x}px)` : "";
+      li.classList.toggle("swiping", x !== 0);
+      if (bgR) bgR.style.opacity = x > 0 ? "1" : "0";
+      if (btnL) btnL.style.opacity = x < 0 ? "1" : "0";
+    };
+    const close = () => { setX(0, true); if (openSwipe === close) openSwipe = null; };
+    if (btnL) btnL.addEventListener("click", () => { close(); left.run(); });
+    li.addEventListener("touchstart", (e) => {
+      if (openSwipe && openSwipe !== close) openSwipe();
+      s = { x: e.touches[0].clientX, y: e.touches[0].clientY, base: offset, active: false, dx: offset };
+    }, { passive: true });
+    li.addEventListener("touchmove", (e) => {
+      if (!s) return;
+      const dx = e.touches[0].clientX - s.x, dy = e.touches[0].clientY - s.y;
+      if (!s.active) {
+        if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) s.active = true; else { if (Math.abs(dy) > 10) s = null; return; }
+      }
+      e.stopPropagation(); // nicht zusätzlich den Monat wechseln
+      let x = s.base + dx;
+      if (!left && x < 0) x = 0;
+      if (!right && x > 0) x = 0;
+      const w = li.offsetWidth;
+      if (Math.abs(x) > w * 0.75) x = Math.sign(x) * (w * 0.75 + (Math.abs(x) - w * 0.75) * 0.25);
+      s.dx = x;
+      setX(x, false);
+    }, { passive: true });
+    li.addEventListener("touchend", (e) => {
+      const t = s; s = null;
+      if (!t || !t.active) return;
+      e.stopPropagation();
+      swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
+      const w = li.offsetWidth, x = t.dx;
+      if (left && x < -w * 0.55) {
+        if (!reduceMotion()) setX(-w, true); else setX(0, false);
+        setTimeout(() => { setX(0, false); left.run(); }, 220);
+      } else if (left && x < -50) { setX(-SWIPE_OPEN, true); openSwipe = close; }
+      else if (right && x > 70) { setX(0, true); right.run(); }
+      else close();
+    });
+    li.addEventListener("click", (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); } }, true);
   }
 
   // Abhaken mit Animation: erst der Haken/Strich, dann (nach kurzer Pause) wandert die Zeile
@@ -858,8 +942,11 @@
     renderTodos();
   }
 
+  let todoDetailShown = false;
   function renderTodos() {
     const detail = todoState.openId !== null;
+    if (detail !== todoDetailShown && $("view-todos").classList.contains("active")) animateIn(detail ? $("todo-detail") : $("todo-overview"), detail ? "push" : "pop");
+    todoDetailShown = detail;
     $("todo-overview").hidden = detail;
     $("todo-detail").hidden = !detail;
     $("task-fab").hidden = !detail;
@@ -2317,6 +2404,114 @@
   $("chat-mic").addEventListener("click", toggleVoice);
   $("voice-hero").addEventListener("click", () => { showTab("chat"); toggleVoice(); });
 
+  // ---------- Gesten: vom Rand zurückwischen, nach unten ziehen zum Aktualisieren ----------
+  const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true || window.LH_FORCE_EDGE;
+  function backAction() {
+    if (SUB_PARENT[currentView]) return { node: $(`view-${currentView}`), run: () => showTab(SUB_PARENT[currentView], { kind: "pop" }) };
+    if (currentView === "todos" && todoState.openId !== null) return { node: $("todo-detail"), run: () => { todoState.openId = null; renderTodos(); } };
+    return null;
+  }
+  {
+    let g = null;
+    document.addEventListener("touchstart", (e) => {
+      // Im Browser (nicht vom Home-Bildschirm) gehört der Rand Safari selbst
+      if (!isStandalone() || e.touches[0].clientX > 24 || !$("sheet-backdrop").hidden) return;
+      const back = backAction();
+      if (back) g = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, back, dx: 0, active: false };
+    }, { passive: true });
+    document.addEventListener("touchmove", (e) => {
+      if (!g) return;
+      const dx = e.touches[0].clientX - g.x, dy = e.touches[0].clientY - g.y;
+      if (!g.active) { if (dx > 8 && dx > Math.abs(dy)) g.active = true; else if (Math.abs(dy) > 12) { g = null; return; } else return; }
+      g.dx = Math.max(0, dx);
+      g.back.node.style.transition = "none";
+      g.back.node.style.transform = `translateX(${g.dx}px)`;
+      g.back.node.classList.add("edge-dragging");
+    }, { passive: true });
+    const end = (e) => {
+      const t = g; g = null;
+      if (!t || !t.active) return;
+      const node = t.back.node, w = window.innerWidth;
+      const fast = t.dx / Math.max(1, e.timeStamp - t.t) > 0.5;
+      node.style.transition = `transform .3s ${IOS_EASE}`;
+      if (t.dx > w * 0.33 || fast) {
+        node.style.transform = `translateX(${w}px)`;
+        setTimeout(() => { node.style.transition = ""; node.style.transform = ""; node.classList.remove("edge-dragging"); t.back.run(); }, 230);
+      } else {
+        node.style.transform = "";
+        setTimeout(() => { node.style.transition = ""; node.classList.remove("edge-dragging"); }, 320);
+      }
+    };
+    document.addEventListener("touchend", end);
+    document.addEventListener("touchcancel", end);
+  }
+
+  // Nach unten ziehen zum Aktualisieren (Heute, Kalender, Börse)
+  const PULL_REFRESH = {
+    today: () => Promise.all([renderToday(), loadMarket(true)]),
+    calendar: () => loadMonth(),
+    market: () => Promise.all([loadMarket(true), loadBriefing()]),
+  };
+  {
+    const ptr = el("div", { className: "ptr", id: "ptr", ariaHidden: "true" });
+    ptr.innerHTML = '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg>';
+    document.body.append(ptr);
+    let p = null, busy = false;
+    const show = (pull) => {
+      ptr.style.transform = `translate(-50%, ${pull - 52}px) rotate(${pull * 3}deg)`;
+      ptr.style.opacity = String(Math.min(1, pull / 60));
+      ptr.classList.toggle("ready", pull > 70);
+    };
+    const hide = () => { ptr.classList.remove("ready", "spinning"); ptr.style.transition = `transform .3s ${IOS_EASE}, opacity .3s`; show(0); setTimeout(() => { ptr.style.transition = ""; }, 320); };
+    document.addEventListener("touchstart", (e) => {
+      if (busy || window.scrollY > 0 || !PULL_REFRESH[currentView] || !$("sheet-backdrop").hidden || $("app").hidden) return;
+      p = { y: e.touches[0].clientY, x: e.touches[0].clientX, pull: 0, active: false };
+    }, { passive: true });
+    document.addEventListener("touchmove", (e) => {
+      if (!p) return;
+      const dy = e.touches[0].clientY - p.y, dx = e.touches[0].clientX - p.x;
+      if (!p.active) { if (dy > 10 && dy > Math.abs(dx) * 1.5 && window.scrollY <= 0 && !rangeGesture) p.active = true; else if (Math.abs(dx) > 10 || dy < -5) { p = null; return; } else return; }
+      p.pull = Math.min(120, dy * 0.5);
+      show(p.pull);
+    }, { passive: true });
+    document.addEventListener("touchend", async () => {
+      const t = p; p = null;
+      if (!t || !t.active) return;
+      if (t.pull <= 70) { hide(); return; }
+      busy = true;
+      ptr.classList.add("spinning");
+      ptr.style.transition = `transform .25s ${IOS_EASE}`;
+      ptr.style.transform = "translate(-50%, 18px)";
+      try { await PULL_REFRESH[currentView](); } catch { /* Fehler zeigen die Bereiche selbst */ }
+      busy = false;
+      hide();
+    });
+  }
+
+  // Dialog offen: Seite dahinter schrumpft leicht (wie iOS-Karten)
+  new MutationObserver(() => document.body.classList.toggle("sheet-open", !$("sheet-backdrop").hidden))
+    .observe($("sheet-backdrop"), { attributes: true, attributeFilter: ["hidden"] });
+
+  // Umschalter mit gleitendem Hintergrund
+  function placeThumb(seg) {
+    const thumb = seg.querySelector(":scope > .seg-thumb");
+    const act = seg.querySelector(":scope > button.active:not([hidden])");
+    if (!act || !seg.offsetWidth) { thumb.style.opacity = "0"; return; }
+    thumb.style.opacity = "1";
+    thumb.style.width = `${act.offsetWidth}px`;
+    thumb.style.transform = `translateX(${act.offsetLeft}px)`;
+  }
+  document.querySelectorAll(".seg").forEach((seg) => {
+    const thumb = el("span", { className: "seg-thumb", ariaHidden: "true" });
+    seg.prepend(thumb);
+    seg.classList.add("has-thumb");
+    const update = () => placeThumb(seg);
+    new MutationObserver(update).observe(seg, { subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
+    if (window.ResizeObserver) new ResizeObserver(update).observe(seg);
+    update();
+    requestAnimationFrame(() => thumb.classList.add("ready")); // erst danach animieren
+  });
+
   // ---------- Start ----------
   async function startApp() {
     // Die App erscheint sofort (der Server braucht nach Ruhezeit einige Sekunden zum Aufwachen).
@@ -2325,7 +2520,7 @@
     $("app").hidden = false;
     $("tabbar").hidden = false;
     renderHistory();
-    showTab(store.get("tab", "today"));
+    showTab(store.get("tab", "today"), { animate: false });
     loadFriends();
     takeSharedText();
     checkHealth();
