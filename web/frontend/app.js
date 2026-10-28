@@ -787,7 +787,7 @@
   $("day-add").addEventListener("click", () => openSheet(state.selected, state.selected));
 
   // Wischen im Kalender wechselt Monat bzw. Woche (das Raster folgt dem Finger)
-  bindSwipe($("view-calendar"), $("cal-grid"), shiftMonth, { blocked: () => rangeGesture, onStart: () => { rangeGesture = false; } });
+  bindSwipe($("view-calendar"), $("cal-grid"), shiftMonth, { blocked: () => rangeGesture || edgeGesture, onStart: () => { rangeGesture = false; } });
 
   // ---------- Termin-Formular ----------
   const swatches = $("f-colors");
@@ -2413,13 +2413,16 @@
     if (currentView === "todos" && todoState.openId !== null) return { node: $("todo-detail"), run: () => { todoState.openId = null; renderTodos(); } };
     return null;
   }
+  // Vom Rand: auf Unterseiten zurück, im Kalender zurück zu „Heute“
+  let edgeGesture = false;
+  const edgeAction = () => backAction() || (currentView === "calendar" ? { node: $("view-calendar"), run: () => showTab("today", { kind: "pop" }) } : null);
   {
     let g = null;
     document.addEventListener("touchstart", (e) => {
       // Im Browser (nicht vom Home-Bildschirm) gehört der Rand Safari selbst
       if (!isStandalone() || e.touches[0].clientX > 24 || !$("sheet-backdrop").hidden) return;
-      const back = backAction();
-      if (back) g = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, back, dx: 0, active: false };
+      const back = edgeAction();
+      if (back) { g = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, back, dx: 0, active: false }; edgeGesture = true; }
     }, { passive: true });
     document.addEventListener("touchmove", (e) => {
       if (!g) return;
@@ -2432,6 +2435,7 @@
     }, { passive: true });
     const end = (e) => {
       const t = g; g = null;
+      edgeGesture = false;
       if (!t || !t.active) return;
       const node = t.back.node, w = window.innerWidth;
       const fast = t.dx / Math.max(1, e.timeStamp - t.t) > 0.5;
@@ -2446,6 +2450,44 @@
     };
     document.addEventListener("touchend", end);
     document.addEventListener("touchcancel", end);
+  }
+
+  // Auf „Heute“ nach links wischen: weiter zum Kalender (die Seite folgt dem Finger)
+  {
+    const today = $("view-today");
+    let t = null;
+    today.addEventListener("touchstart", (e) => {
+      if (!$("sheet-backdrop").hidden || e.target.closest(".weather, .seg, input, textarea, button.voice-hero")) return;
+      if (isStandalone() && e.touches[0].clientX <= 24) return;
+      t = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, dx: 0, active: false };
+    }, { passive: true });
+    today.addEventListener("touchmove", (e) => {
+      if (!t) return;
+      const dx = e.touches[0].clientX - t.x, dy = e.touches[0].clientY - t.y;
+      if (!t.active) {
+        if (dx < -12 && Math.abs(dx) > Math.abs(dy) * 1.5) t.active = true;
+        else if (Math.abs(dy) > 12 || dx > 12) { t = null; return; } else return;
+      }
+      t.dx = Math.min(0, dx);
+      today.style.transition = "none";
+      today.style.transform = `translateX(${t.dx * 0.6}px)`;
+      today.style.opacity = String(1 - Math.min(0.4, -t.dx / (window.innerWidth * 1.5)));
+    }, { passive: true });
+    const end = (e) => {
+      const s = t; t = null;
+      if (!s || !s.active) return;
+      const fast = -s.dx / Math.max(1, e.timeStamp - s.t) > 0.5;
+      const go = -s.dx > Math.max(70, window.innerWidth * 0.25) || fast;
+      today.style.transition = `transform .22s ${IOS_EASE}, opacity .22s`;
+      if (go && !reduceMotion()) {
+        today.style.transform = "translateX(-40%)";
+        today.style.opacity = "0";
+        setTimeout(() => { today.style.transition = today.style.transform = today.style.opacity = ""; showTab("calendar", { kind: "push" }); }, 170);
+      } else if (go) { today.style.transition = today.style.transform = today.style.opacity = ""; showTab("calendar"); }
+      else { today.style.transform = ""; today.style.opacity = ""; setTimeout(() => { today.style.transition = ""; }, 240); }
+    };
+    today.addEventListener("touchend", end);
+    today.addEventListener("touchcancel", end);
   }
 
   // Nach unten ziehen zum Aktualisieren (Heute, Kalender, Börse)
