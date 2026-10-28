@@ -787,7 +787,7 @@
   $("day-add").addEventListener("click", () => openSheet(state.selected, state.selected));
 
   // Wischen im Kalender wechselt Monat bzw. Woche (das Raster folgt dem Finger)
-  bindSwipe($("view-calendar"), $("cal-grid"), shiftMonth, { blocked: () => rangeGesture || edgeGesture, onStart: () => { rangeGesture = false; } });
+  bindSwipe($("cal-grid"), $("cal-grid"), shiftMonth, { blocked: () => rangeGesture || edgeGesture, onStart: () => { rangeGesture = false; } });
 
   // ---------- Termin-Formular ----------
   const swatches = $("f-colors");
@@ -2452,43 +2452,49 @@
     document.addEventListener("touchcancel", end);
   }
 
-  // Auf „Heute“ nach links wischen: weiter zum Kalender (die Seite folgt dem Finger)
-  {
-    const today = $("view-today");
+  // Wischen zwischen Tabs: nach links = nächster Tab, nach rechts = vorheriger (die Seite folgt dem Finger)
+  function tabSwipe(view, { prev = null, next = null, exclude = "" }) {
     let t = null;
-    today.addEventListener("touchstart", (e) => {
-      if (!$("sheet-backdrop").hidden || e.target.closest(".weather, .seg, input, textarea, button.voice-hero")) return;
-      if (isStandalone() && e.touches[0].clientX <= 24) return;
+    const skip = ".seg, input, textarea, button.voice-hero" + (exclude ? `, ${exclude}` : "");
+    view.addEventListener("touchstart", (e) => {
+      if (!$("sheet-backdrop").hidden || e.target.closest(skip)) return;
+      if (isStandalone() && e.touches[0].clientX <= 24) return; // Rand gehört dem Zurückwischen
       t = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, dx: 0, active: false };
     }, { passive: true });
-    today.addEventListener("touchmove", (e) => {
+    view.addEventListener("touchmove", (e) => {
       if (!t) return;
       const dx = e.touches[0].clientX - t.x, dy = e.touches[0].clientY - t.y;
       if (!t.active) {
-        if (dx < -12 && Math.abs(dx) > Math.abs(dy) * 1.5) t.active = true;
-        else if (Math.abs(dy) > 12 || dx > 12) { t = null; return; } else return;
+        const ok = (dx < -12 && next) || (dx > 12 && prev);
+        if (ok && Math.abs(dx) > Math.abs(dy) * 1.5) t.active = true;
+        else if (Math.abs(dy) > 12 || Math.abs(dx) > 12) { t = null; return; } else return;
       }
-      t.dx = Math.min(0, dx);
-      today.style.transition = "none";
-      today.style.transform = `translateX(${t.dx * 0.6}px)`;
-      today.style.opacity = String(1 - Math.min(0.4, -t.dx / (window.innerWidth * 1.5)));
+      t.dx = !next ? Math.max(0, dx) : !prev ? Math.min(0, dx) : dx;
+      view.style.transition = "none";
+      view.style.transform = `translateX(${t.dx * 0.6}px)`;
+      view.style.opacity = String(1 - Math.min(0.4, Math.abs(t.dx) / (window.innerWidth * 1.5)));
     }, { passive: true });
     const end = (e) => {
       const s = t; t = null;
       if (!s || !s.active) return;
-      const fast = -s.dx / Math.max(1, e.timeStamp - s.t) > 0.5;
-      const go = -s.dx > Math.max(70, window.innerWidth * 0.25) || fast;
-      today.style.transition = `transform .22s ${IOS_EASE}, opacity .22s`;
+      const fast = Math.abs(s.dx) / Math.max(1, e.timeStamp - s.t) > 0.5;
+      const target = s.dx < 0 ? next : prev;
+      const go = target && (Math.abs(s.dx) > Math.max(70, window.innerWidth * 0.25) || fast);
+      view.style.transition = `transform .22s ${IOS_EASE}, opacity .22s`;
+      const reset = () => { view.style.transition = view.style.transform = view.style.opacity = ""; };
       if (go && !reduceMotion()) {
-        today.style.transform = "translateX(-40%)";
-        today.style.opacity = "0";
-        setTimeout(() => { today.style.transition = today.style.transform = today.style.opacity = ""; showTab("calendar", { kind: "push" }); }, 170);
-      } else if (go) { today.style.transition = today.style.transform = today.style.opacity = ""; showTab("calendar"); }
-      else { today.style.transform = ""; today.style.opacity = ""; setTimeout(() => { today.style.transition = ""; }, 240); }
+        view.style.transform = `translateX(${s.dx < 0 ? -40 : 40}%)`;
+        view.style.opacity = "0";
+        setTimeout(() => { reset(); showTab(target, { kind: s.dx < 0 ? "push" : "pop" }); }, 170);
+      } else if (go) { reset(); showTab(target); }
+      else { view.style.transform = ""; view.style.opacity = ""; setTimeout(() => { view.style.transition = ""; }, 240); }
     };
-    today.addEventListener("touchend", end);
-    today.addEventListener("touchcancel", end);
+    view.addEventListener("touchend", end);
+    view.addEventListener("touchcancel", end);
   }
+  tabSwipe($("view-today"), { next: "calendar", exclude: ".weather" });
+  // Im Kalender: auf dem Raster wechselt der Monat, darüber und darunter der Tab
+  tabSwipe($("view-calendar"), { prev: "today", next: "plan", exclude: "#cal-grid, .cal-weekdays, .friend-bubbles" });
 
   // Nach unten ziehen zum Aktualisieren (Heute, Kalender, Börse)
   const PULL_REFRESH = {
@@ -2509,6 +2515,7 @@
     const hide = () => { ptr.classList.remove("ready", "spinning"); ptr.style.transition = `transform .3s ${IOS_EASE}, opacity .3s`; show(0); setTimeout(() => { ptr.style.transition = ""; }, 320); };
     document.addEventListener("touchstart", (e) => {
       if (busy || window.scrollY > 0 || !PULL_REFRESH[currentView] || !$("sheet-backdrop").hidden || $("app").hidden) return;
+      if (!e.target.closest("#cal-grid")) rangeGesture = false; // alte Mehrtages-Auswahl zählt hier nicht
       p = { y: e.touches[0].clientY, x: e.touches[0].clientX, pull: 0, active: false };
     }, { passive: true });
     document.addEventListener("touchmove", (e) => {
