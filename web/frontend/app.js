@@ -147,6 +147,7 @@
     if (!["friends", "friend", "market"].includes(name)) store.set("tab", name); // Unterseiten nicht als Start-Tab merken
     if (kind === "push" || kind === "pop") window.scrollTo(0, 0);
     animateIn($(`view-${name}`), opts.kind || kind);
+    requestAnimationFrame(updateNavbar);
   }
   document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.querySelectorAll("[data-goto]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.goto)));
@@ -2511,6 +2512,24 @@
     update();
     requestAnimationFrame(() => thumb.classList.add("ready")); // erst danach animieren
   });
+
+  // ---------- Kompakte Kopfzeile beim Scrollen (große Titel wie in iOS) ----------
+  const VIEW_TITLE = { today: "Heute", calendar: "Kalender", plan: "Stundenplan", todos: "Aufgaben", chat: "Assistent", market: "Börse", friends: "Freunde" };
+  function navTitle() {
+    if (currentView === "todos" && todoState.openId !== null) return $("td-name").textContent;
+    if (currentView === "friend") return $("fv-name").textContent;
+    if (currentView === "calendar") return $("cal-title").textContent;
+    return VIEW_TITLE[currentView] || "";
+  }
+  function updateNavbar() {
+    const compact = window.scrollY > 52 && !$("app").hidden;
+    document.body.classList.toggle("nav-compact", compact);
+    if (!compact) return;
+    $("nav-title").textContent = navTitle();
+    $("nav-back").hidden = !backAction();
+  }
+  window.addEventListener("scroll", updateNavbar, { passive: true });
+  $("nav-back").addEventListener("click", () => { const b = backAction(); if (b) b.run(); });
 
   // ---------- Start ----------
   async function startApp() {

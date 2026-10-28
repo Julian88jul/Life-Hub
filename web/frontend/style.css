@@ -49,7 +49,7 @@ html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.45 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, p { margin: 0; }
@@ -1115,4 +1115,44 @@ body.sheet-open .tabbar { opacity: .4; transition: opacity .3s; }
   #app, .seg-thumb.ready { transition: none; }
   .sheet, .backdrop { animation: none; }
   body.sheet-open #app { transform: none; filter: none; }
+}
+
+/* ---------- iOS-Optik: Kopfzeile, Schrift, Druck-Feedback, Tab-Leiste ---------- */
+.navbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 15; height: calc(env(safe-area-inset-top) + 46px);
+  padding: env(safe-area-inset-top) 12px 0; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(170%); backdrop-filter: blur(22px) saturate(170%);
+  border-bottom: 1px solid var(--line); opacity: 0; transform: translateY(-4px); pointer-events: none;
+  transition: opacity .25s var(--ios-ease), transform .25s var(--ios-ease);
+}
+body.nav-compact .navbar { opacity: 1; transform: none; pointer-events: auto; }
+.nav-title { font-size: 17px; font-weight: 600; letter-spacing: -.01em; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-back { position: absolute; left: 8px; bottom: 6px; border: 0; background: none; color: var(--accent); font-size: 17px; padding: 6px 8px; }
+body.sheet-open .navbar { opacity: 0; }
+
+/* Große Titel: leicht verblassen, sobald die Kopfzeile erscheint */
+.top h1, .detail-title h1, .cal-head h1 { transition: opacity .25s var(--ios-ease); }
+body.nav-compact .top h1, body.nav-compact .detail-title h1 { opacity: .25; }
+
+/* Apple-Schrift: Titel etwas enger wie in iOS */
+.top h1, .detail-title h1 { letter-spacing: -.03em; }
+
+/* Druck-Feedback wie bei iOS-Listen */
+.friend-row, .watch-row, .market-card, .class-card, .tl-item, .mv-row, .news-list li, .date-row, .pill, .bubble, .avatar-opt {
+  transition: transform .15s var(--ios-ease), background-color .15s;
+}
+.friend-row:active, .market-card:active, .class-card:active { transform: scale(.985); }
+.watch-row:active, .news-list li:active { background-color: var(--accent-soft); }
+.swipe-content:active { background-color: color-mix(in srgb, var(--row-bg) 88%, var(--text)); }
+.btn:active, .chip:active, .icon-btn:active, .text-btn:active, .mic-btn:active, .fab:active { transform: scale(.95); }
+.text-btn:active { opacity: .6; }
+
+/* Tab-Leiste: aktives Symbol gefüllt */
+.tabbar button.active svg { fill: color-mix(in srgb, var(--accent) 28%, transparent); }
+.tabbar button { -webkit-touch-callout: none; }
+.tabbar button:active svg { transform: scale(.88); }
+
+@media (prefers-reduced-motion: reduce) {
+  .navbar, .top h1, .detail-title h1 { transition: none; }
 }
