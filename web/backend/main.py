@@ -985,8 +985,44 @@ TOOLS = [
     },
     {
         "name": "list_timetable",
-        "description": "Zeigt den wöchentlichen Stundenplan (Vorlesungen) des Nutzers, optional nur für einen Wochentag (1=Montag bis 7=Sonntag).",
+        "description": "Zeigt den wöchentlichen Stundenplan (Vorlesungen) des Nutzers mit ids, optional nur für einen Wochentag (1=Montag bis 7=Sonntag).",
         "parameters": {"type": "object", "properties": {"weekday": {"type": "integer", "description": "1=Montag ... 7=Sonntag, optional"}}},
+    },
+    {
+        "name": "create_class",
+        "description": "Trägt eine wöchentlich wiederkehrende Veranstaltung in den Stundenplan ein. NUR verwenden, wenn der Nutzer ausdrücklich den Stundenplan bzw. eine wöchentliche Vorlesung meint; einzelne Termine gehören in den Kalender (create_event).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "weekday": {"type": "integer", "description": "1=Montag ... 7=Sonntag"},
+                "start_time": {"type": "string", "description": "HH:MM"},
+                "end_time": {"type": "string", "description": "HH:MM, optional"},
+                "room": {"type": "string", "description": "optional"},
+            },
+            "required": ["title", "weekday", "start_time"],
+        },
+    },
+    {
+        "name": "update_class",
+        "description": "Ändert einen Stundenplan-Eintrag über seine id (aus list_timetable). Nur übergebene Felder werden geändert.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "class_id": {"type": "integer"},
+                "title": {"type": "string"},
+                "weekday": {"type": "integer"},
+                "start_time": {"type": "string"},
+                "end_time": {"type": "string"},
+                "room": {"type": "string"},
+            },
+            "required": ["class_id"],
+        },
+    },
+    {
+        "name": "delete_class",
+        "description": "Löscht einen Stundenplan-Eintrag über seine id (aus list_timetable). Nur auf ausdrücklichen Wunsch.",
+        "parameters": {"type": "object", "properties": {"class_id": {"type": "integer"}}, "required": ["class_id"]},
     },
     {
         "name": "list_todo_lists",
@@ -1042,6 +1078,24 @@ def wants_task(messages: list[dict]) -> bool:
     return False
 
 
+# Stundenplan nur auf ausdrücklichen Wunsch ändern: sonst landen normale Termine als wöchentliche Vorlesung
+TIMETABLE_INTENT = re.compile(
+    r"stundenplan|vorlesung|seminar|tutorium|wöchentlich|jede[nrs]?\s+(woche|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)"
+    r"|\b(montags|dienstags|mittwochs|donnerstags|freitags|samstags|sonntags)\b", re.IGNORECASE)
+
+
+def wants_timetable(messages: list[dict]) -> bool:
+    users = [m for m in messages if m["role"] == "user"]
+    if not users:
+        return False
+    if TIMETABLE_INTENT.search(users[-1]["content"]):
+        return True
+    last = users[-1]["content"]
+    if len(last.strip()) <= 30 and len(messages) >= 2 and messages[-1]["role"] == "user" and messages[-2]["role"] == "assistant":
+        return bool(TIMETABLE_INTENT.search(messages[-2]["content"]))
+    return False
+
+
 def plain_text(text: str) -> str:
     """Die Oberfläche zeigt reinen Text: Markdown-Zeichen der KI (**fett**, # Überschriften, Listenpunkte) entfernen."""
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.S)
@@ -1066,7 +1120,9 @@ def system_prompt() -> str:
         "Kurzformen wie '22. 20 Zahnarzt' bedeuten: am 22. (nächstes passendes Datum) um 20:00 Uhr, Titel Zahnarzt. "
         "Aufgabenlisten: Aufgaben legst du nur in bestehenden Listen an (Listen legt der Nutzer selbst an); rufe bei Unsicherheit list_todo_lists auf "
         "und frage nach, wenn keine Liste passt. Aufgaben mit Fälligkeitsdatum erscheinen automatisch im Kalender. "
-        "Den Stundenplan kannst du mit list_timetable lesen. Bilder (Screenshots von Skripten, Stundenplänen) analysiert der Nutzer selbst im Import-Dialog des Hubs; verweise darauf, wenn danach gefragt wird. "
+        "Den Stundenplan kannst du mit list_timetable lesen; bei Fragen wie 'Was habe ich heute/morgen?' schaue in Kalender UND Stundenplan. "
+        "Wöchentliche Vorlesungen trägst du mit create_class ein, änderst sie mit update_class und löschst sie mit delete_class (ids aus list_timetable), "
+        "aber nur, wenn der Nutzer ausdrücklich den Stundenplan oder eine wöchentliche Veranstaltung meint. Bestätige Änderungen mit Tag, Uhrzeit und Titel. Bilder (Screenshots von Skripten, Stundenplänen) analysiert der Nutzer selbst im Import-Dialog des Hubs; verweise darauf, wenn danach gefragt wird. "
         "Rechne relative Angaben (morgen, nächsten Montag) selbst in Datumswerte um. "
         "Frage nach, wenn Datum oder Titel eines Termins unklar sind. "
         "Bestätige angelegte Termine mit Titel, Datum und Uhrzeit. "
@@ -1074,7 +1130,13 @@ def system_prompt() -> str:
     )
 
 
-def make_handlers(uid: int, created: list, tasks_changed: list, allow_tasks: bool = True):
+def make_handlers(uid: int, created: list, tasks_changed: list, allow_tasks: bool = True,
+                  allow_timetable: bool = False, classes_changed: list | None = None):
+    classes_changed = classes_changed if classes_changed is not None else []
+    no_timetable = {"error": "Der Nutzer hat nicht ausdrücklich nach dem Stundenplan gefragt. Lege stattdessen einen Kalendertermin an oder frage nach."}
+
+    def class_out(r: dict) -> dict:
+        return {"id": r["id"], "day": DAY_NAMES[r["weekday"]], "start": r["start_time"], "end": r["end_time"], "title": r["title"], "room": r["room"]}
     async def list_tool(args: dict) -> dict:
         d_from, d_to = str(args.get("from_date", "")), str(args.get("to_date", ""))
         if not (re.match(DATE_RE, d_from) and re.match(DATE_RE, d_to)):
@@ -1111,10 +1173,63 @@ def make_handlers(uid: int, created: list, tasks_changed: list, allow_tasks: boo
             wd = int(args["weekday"]) if args.get("weekday") else None
         except (TypeError, ValueError):
             wd = None
-        return {"classes": [
-            {"day": DAY_NAMES[r["weekday"]], "start": r["start_time"], "end": r["end_time"], "title": r["title"], "room": r["room"]}
-            for r in rows if wd is None or r["weekday"] == wd
-        ]}
+        return {"classes": [class_out(r) for r in rows if wd is None or r["weekday"] == wd]}
+
+    def build_class(args: dict, base: dict | None = None) -> ClassIn:
+        base = base or {}
+        pick = lambda k: args[k] if k in args and args[k] is not None else base.get(k)
+        start, end = pick("start_time"), pick("end_time")
+        title = str(pick("title") or "").strip()[:120]
+        return ClassIn(
+            title=title, weekday=int(pick("weekday") or 0),
+            start_time=_norm_time(start) or str(start or ""), end_time=(_norm_time(end) or str(end)) if end else None,
+            room=str(pick("room") or "").strip()[:80],
+            color=base.get("color") or PALETTE[sum(map(ord, title.lower())) % len(PALETTE)], icon=base.get("icon") or "",
+        )
+
+    async def create_class_tool(args: dict) -> dict:
+        if not allow_timetable:
+            return no_timetable
+        try:
+            cl = build_class(args)
+        except Exception as exc:
+            return {"error": f"Ungültige Eingabe: {exc}"}
+        row = await asyncio.to_thread(store.create_class, uid, cl.model_dump())
+        classes_changed.append(row)
+        return {"created": class_out(row)}
+
+    async def update_class_tool(args: dict) -> dict:
+        if not allow_timetable:
+            return no_timetable
+        try:
+            class_id = int(args.get("class_id"))
+        except (TypeError, ValueError):
+            return {"error": "class_id fehlt"}
+        rows = await asyncio.to_thread(store.list_classes, uid)
+        base = next((r for r in rows if r["id"] == class_id), None)
+        if not base:
+            return {"error": "Eintrag nicht gefunden"}
+        try:
+            cl = build_class(args, base)
+        except Exception as exc:
+            return {"error": f"Ungültige Eingabe: {exc}"}
+        row = await asyncio.to_thread(store.update_class, uid, class_id, cl.model_dump())
+        if not row:
+            return {"error": "Eintrag nicht gefunden"}
+        classes_changed.append(row)
+        return {"updated": class_out(row)}
+
+    async def delete_class_tool(args: dict) -> dict:
+        if not allow_timetable:
+            return no_timetable
+        try:
+            class_id = int(args.get("class_id"))
+        except (TypeError, ValueError):
+            return {"error": "class_id fehlt"}
+        if not await asyncio.to_thread(store.delete_class, uid, class_id):
+            return {"error": "Eintrag nicht gefunden"}
+        classes_changed.append(class_id)
+        return {"deleted": True}
 
     async def todo_lists_tool(_: dict) -> dict:
         lists = await asyncio.to_thread(store.list_lists, uid)
@@ -1169,7 +1284,8 @@ def make_handlers(uid: int, created: list, tasks_changed: list, allow_tasks: boo
 
     return {
         "list_events": list_tool, "create_event": create_tool,
-        "list_timetable": timetable_tool, "list_todo_lists": todo_lists_tool, "list_tasks": tasks_tool,
+        "list_timetable": timetable_tool, "create_class": create_class_tool, "update_class": update_class_tool,
+        "delete_class": delete_class_tool, "list_todo_lists": todo_lists_tool, "list_tasks": tasks_tool,
         "create_task": create_task_tool, "complete_task": complete_task_tool,
     }
 
@@ -1178,12 +1294,14 @@ def make_handlers(uid: int, created: list, tasks_changed: list, allow_tasks: boo
 async def chat(body: ChatIn, uid: int = Depends(current_user)):
     created: list = []
     tasks_changed: list = []
+    classes_changed: list = []
     try:
         msgs = [m.model_dump() for m in body.messages]
-        reply = await llm.chat(msgs, system_prompt(), TOOLS, make_handlers(uid, created, tasks_changed, wants_task(msgs)))
+        handlers = make_handlers(uid, created, tasks_changed, wants_task(msgs), wants_timetable(msgs), classes_changed)
+        reply = await llm.chat(msgs, system_prompt(), TOOLS, handlers)
     except llm.LLMError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
-    return {"reply": plain_text(reply), "events_created": created, "tasks_changed": len(tasks_changed)}
+    return {"reply": plain_text(reply), "events_created": created, "tasks_changed": len(tasks_changed), "timetable_changed": len(classes_changed)}
 
 
 @app.get("/api/health")

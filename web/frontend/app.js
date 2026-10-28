@@ -2310,6 +2310,7 @@
       addBubble("assistant", res.reply);
       store.set("chat", history.slice(-40));
       if ((res.events_created && res.events_created.length) || res.tasks_changed) refreshData();
+      if (res.timetable_changed) { loadPlan(); renderToday(); }
       if (spoken) speak(plainText(res.reply));
     } catch (err) {
       pending.remove();

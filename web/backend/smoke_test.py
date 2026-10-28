@@ -384,6 +384,35 @@ with TestClient(main.app) as c:
     check("„abhaken“ wird erkannt", wt(u("Hak Mathe ab")))
     check("Bestätigung nach Rückfrage zu Aufgabe", wt([{"role": "user", "content": "Skript drucken"}, {"role": "assistant", "content": "Soll ich das als Aufgabe auf deine Uni-Liste setzen?"}, {"role": "user", "content": "ja"}]))
     check("Bestätigung ohne Aufgaben-Rückfrage bleibt Termin", not wt([{"role": "user", "content": "Zahnarzt am 22."}, {"role": "assistant", "content": "Um wie viel Uhr?"}, {"role": "user", "content": "20 Uhr"}]))
+    wtt = main.wants_timetable
+    check("„Stundenplan“ wird erkannt", wtt(u("Trag Mathe montags 8 bis 10 in meinen Stundenplan ein")))
+    check("„Vorlesung“ wird erkannt", wtt(u("Neue Vorlesung Physik jeden Dienstag 12 Uhr")))
+    check("„jeden Mittwoch“ wird erkannt", wtt(u("Ich habe jeden Mittwoch Chemie von 10 bis 12")))
+    check("Normaler Termin ist kein Stundenplan", not wtt(u("Morgen 15 Uhr Zahnarzt")))
+    check("Bestätigung nach Stundenplan-Rückfrage", wtt([{"role": "user", "content": "Mathe 8-10"}, {"role": "assistant", "content": "An welchem Wochentag soll ich das in den Stundenplan eintragen?"}, {"role": "user", "content": "Montag"}]))
+
+    print("Assistent: Stundenplan-Werkzeuge (ohne KI)")
+    import asyncio as _aio
+    uid_a = main.auth.verify_token(token)
+    changed = []
+    hd = main.make_handlers(uid_a, [], [], False, True, changed)
+    before = len(main.store.list_classes(uid_a))
+    r = _aio.run(hd["create_class"]({"title": "Lineare Algebra", "weekday": 1, "start_time": "8:00", "end_time": "10:00", "room": "H1"}))
+    check("Assistent trägt Vorlesung ein", "created" in r and r["created"]["day"] == "Montag" and r["created"]["start"] == "08:00", str(r))
+    cid_new = r["created"]["id"]
+    lt = _aio.run(hd["list_timetable"]({"weekday": 1}))
+    check("Stundenplan-Liste enthält id", any(x["id"] == cid_new for x in lt["classes"]))
+    r = _aio.run(hd["update_class"]({"class_id": cid_new, "room": "H5", "start_time": "09:00"}))
+    check("Assistent ändert Vorlesung", r.get("updated", {}).get("room") == "H5" and r["updated"]["start"] == "09:00", str(r))
+    check("Ungültiger Wochentag abgelehnt", "error" in _aio.run(hd["create_class"]({"title": "X", "weekday": 9, "start_time": "08:00"})))
+    check("Ende vor Beginn abgelehnt", "error" in _aio.run(hd["update_class"]({"class_id": cid_new, "end_time": "07:00"})))
+    r = _aio.run(hd["delete_class"]({"class_id": cid_new}))
+    check("Assistent löscht Vorlesung", r.get("deleted") is True and len(main.store.list_classes(uid_a)) == before)
+    check("Änderungen werden gemeldet", len(changed) == 3)
+    hd_no = main.make_handlers(uid_a, [], [], False, False, [])
+    check("Ohne Stundenplan-Wunsch kein Eintrag", "error" in _aio.run(hd_no["create_class"]({"title": "Y", "weekday": 2, "start_time": "08:00"})))
+    check("Fremde Vorlesung nicht löschbar", "error" in _aio.run(main.make_handlers(main.auth.verify_token(other), [], [], False, True, [])["delete_class"]({"class_id": cid_new})))
+
     pt = main.plain_text
     check("Fettdruck entfernt", pt("Termin **Zahnarzt** am **22.**") == "Termin Zahnarzt am 22.")
     check("Listenpunkte statt Sternchen", pt("* **Titel:** Zahnarzt\n* Datum: 22.") == "• Titel: Zahnarzt\n• Datum: 22.")
