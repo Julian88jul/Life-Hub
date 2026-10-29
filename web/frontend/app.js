@@ -116,7 +116,7 @@
   // ---------- Bewegung: Übergänge wie in iOS ----------
   const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const IOS_EASE = "cubic-bezier(.32, .72, 0, 1)";
-  const SUB_PARENT = { market: "today", friends: "today", friend: "friends" }; // Unterseiten und wohin „zurück“ führt
+  const SUB_PARENT = { market: "today", friends: "today", friend: "friends", recipes: "today", recipe: "recipes" }; // Unterseiten und wohin „zurück“ führt
   let currentView = null;
 
   // push = Seite kommt von rechts, pop = zurück (kommt von links), fade = Tab-Wechsel
@@ -139,12 +139,14 @@
     if (name === "calendar") loadMonth();
     $("task-fab").hidden = !(name === "todos" && todoState.openId !== null);
     $("plan-fab").hidden = name !== "plan";
+    $("recipe-fab").hidden = name !== "recipes";
     if (name === "plan") loadPlan();
     if (name === "todos") loadTodos();
     if (name === "chat") scrollChat();
     if (name === "friends") { renderFriends(); loadFriends(); }
     if (name === "market") { loadMarket(true); loadBriefing(); }
-    if (!["friends", "friend", "market"].includes(name)) store.set("tab", name); // Unterseiten nicht als Start-Tab merken
+    if (name === "recipes") { renderRecipes(); loadRecipes(true); }
+    if (!SUB_PARENT[name]) store.set("tab", name); // Unterseiten nicht als Start-Tab merken
     if (kind === "push" || kind === "pop") window.scrollTo(0, 0);
     animateIn($(`view-${name}`), opts.kind || kind);
     requestAnimationFrame(updateNavbar);
@@ -352,7 +354,7 @@
     $("today-date").textContent = longDate(todayKey);
     $("whoami").textContent = store.get("user", "") ? `Angemeldet als ${store.get("user", "")}` : "";
     renderWeather();
-    loadMarket(); loadBriefing();
+    loadMarket(); loadBriefing(); loadRecipes();
     try {
       const [evs, todos, classes] = await Promise.all([api(`/api/events?from=${todayKey}&to=${weekKey}`), api("/api/todos"), api("/api/timetable")]);
       renderTodayClasses(classes);
@@ -834,7 +836,7 @@
     $("sheet").hidden = false;
     setTimeout(() => $("f-title").focus(), 50);
   }
-  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
+  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet", "recipe-sheet", "rimport-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
   $("f-cancel").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
@@ -1506,24 +1508,30 @@
   window.addEventListener("dragover", (e) => {
     if (!appVisible() || !hasFiles(e)) return;
     e.preventDefault(); // verhindert, dass der Browser das Bild als Seite öffnet
-    if ($("import-sheet").hidden) $("drop-overlay").hidden = false;
+    if ($("import-sheet").hidden && $("rimport-sheet").hidden && $("recipe-sheet").hidden) $("drop-overlay").hidden = false;
   });
   window.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("drop-overlay").hidden = true; });
+  // Bilder landen dort, wo man gerade ist: offener Dialog, Rezepte oder Kalender/Stundenplan
+  function routeImages(files) {
+    if (!$("import-sheet").hidden) { addImportFiles(files); return; }
+    if (!$("rimport-sheet").hidden) { addRecipeFiles(files); return; }
+    if (!$("recipe-sheet").hidden) { setRecipePhoto([...files].find((f) => f.type.startsWith("image/"))); return; }
+    if (currentView === "recipes" || currentView === "recipe") { openRecipeImport(files); return; }
+    const tab = currentTabName();
+    openImport(tab === "plan" ? "timetable" : tab === "calendar" ? "events" : null, files);
+  }
   window.addEventListener("drop", (e) => {
     $("drop-overlay").hidden = true;
     if (!appVisible() || !hasFiles(e)) return;
     e.preventDefault();
-    if (!$("import-sheet").hidden) { addImportFiles(e.dataTransfer.files); return; }
-    const tab = currentTabName();
-    openImport(tab === "plan" ? "timetable" : tab === "calendar" ? "events" : null, e.dataTransfer.files);
+    routeImages(e.dataTransfer.files);
   });
   document.addEventListener("paste", (e) => {
     if (!appVisible() || !e.clipboardData) return;
     const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
     e.preventDefault();
-    if ($("import-sheet").hidden) { const tab = currentTabName(); openImport(tab === "plan" ? "timetable" : tab === "calendar" ? "events" : null, files); }
-    else addImportFiles(files);
+    routeImages(files);
   });
 
   // Bild verkleinern (spart Datenmenge und KI-Kosten). Sehr lange Screenshots werden in überlappende Abschnitte geteilt.
@@ -1915,6 +1923,392 @@
   $("market-card").addEventListener("click", () => showTab("market"));
   $("market-card").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showTab("market"); } });
   $("market-back").addEventListener("click", () => showTab("today"));
+
+  // ---------- Rezepte ----------
+  const RECIPE_CATS = [
+    { key: "breakfast", label: "Frühstück", emoji: "🥐", color: "#f59e0b" },
+    { key: "main", label: "Hauptgericht", emoji: "🍝", color: "#ef4444" },
+    { key: "side", label: "Beilage", emoji: "🥗", color: "#10b981" },
+    { key: "dessert", label: "Dessert", emoji: "🍮", color: "#ec4899" },
+    { key: "baking", label: "Backen", emoji: "🧁", color: "#8b5cf6" },
+    { key: "snack", label: "Snack", emoji: "🥨", color: "#0ea5e9" },
+    { key: "drink", label: "Getränk", emoji: "🥤", color: "#4f46e5" },
+    { key: "other", label: "Sonstiges", emoji: "🍽️", color: "#64748b" },
+  ];
+  const recipeCat = (key) => RECIPE_CATS.find((c) => c.key === key) || RECIPE_CATS[RECIPE_CATS.length - 1];
+  // items: Liste (mit Vorschaubild, ohne großes Foto); open: angezeigtes Rezept; got: beim Kochen abgehakte Zutaten
+  const rs = { items: [], loadedAt: 0, error: "", filter: "all", query: "", open: null, openId: null, got: new Set() };
+  const jpegSrc = (b64) => `data:image/jpeg;base64,${b64}`;
+  const recipeLines = (text) => text.split("\n").map((s) => s.trim()).filter(Boolean);
+
+  function recipeMeta(r, icons = false) {
+    const out = [];
+    if (r.minutes) out.push(`${icons ? "⏱ " : ""}${durText(r.minutes)}`);
+    if (r.servings) out.push(`${icons ? "👥 " : ""}${r.servings} ${r.servings === 1 ? "Portion" : "Portionen"}`);
+    return out;
+  }
+
+  // Bild eines Rezepts: eigenes Foto, sonst eine getönte Fläche mit dem Symbol der Kategorie
+  function recipePic(r, big = false) {
+    const cat = recipeCat(r.category);
+    const box = el("div", { className: "rpic" });
+    box.style.setProperty("--c", cat.color);
+    const src = (big && r.photo) || r.thumb;
+    if (src) box.append(el("img", { src: jpegSrc(src), alt: "", decoding: "async" }));
+    else box.append(el("span", { className: "rpic-emoji", textContent: cat.emoji, ariaHidden: "true" }));
+    return box;
+  }
+
+  // Liste höchstens einmal pro Minute holen (außer `force`, z. B. nach dem Speichern)
+  async function loadRecipes(force = false) {
+    if (force || Date.now() - rs.loadedAt > 60000) {
+      try {
+        rs.items = await api("/api/recipes");
+        rs.loadedAt = Date.now();
+        rs.error = "";
+      } catch (e) { rs.error = e.message; }
+    }
+    renderRecipeCard();
+    if (currentView === "recipes") renderRecipes();
+  }
+
+  // Karte auf „Heute“: die vier zuletzt angelegten Rezepte
+  function renderRecipeCard() {
+    const recent = [...rs.items].sort((a, b) => b.id - a.id).slice(0, 4);
+    $("rc-strip").replaceChildren(...recent.map((r) => {
+      const item = el("div", { className: "rc-item" }, recipePic(r), el("small", { textContent: r.name }));
+      item.addEventListener("click", (e) => { e.stopPropagation(); openRecipe(r); });
+      return item;
+    }));
+    const n = rs.items.length;
+    $("rc-sub").textContent = n ? `${n} ${n === 1 ? "Rezept" : "Rezepte"}` : "Von Hand oder per Foto eintragen.";
+  }
+
+  const recipeMatches = (r, q) => !q || r.name.toLowerCase().includes(q) || (r.ingredients || []).some((i) => i.toLowerCase().includes(q));
+
+  function renderRecipes() {
+    // Nur Kategorien als Filter anbieten, in denen es auch Rezepte gibt
+    const present = RECIPE_CATS.filter((c) => rs.items.some((r) => r.category === c.key));
+    if (!present.some((c) => c.key === rs.filter)) rs.filter = "all";
+    $("recipe-filter").hidden = present.length < 2;
+    $("recipe-filter").replaceChildren(...[{ key: "all", label: "Alle", emoji: "" }, ...present].map((c) => {
+      const on = rs.filter === c.key;
+      const b = el("button", { type: "button", className: on ? "on" : "", textContent: c.emoji ? `${c.emoji} ${c.label}` : c.label });
+      b.setAttribute("aria-pressed", String(on));
+      b.addEventListener("click", () => { rs.filter = c.key; renderRecipes(); });
+      return b;
+    }));
+    const q = rs.query.trim().toLowerCase();
+    const list = rs.items
+      .filter((r) => (rs.filter === "all" || r.category === rs.filter) && recipeMatches(r, q))
+      .sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
+    $("recipe-grid").replaceChildren(...list.map((r) => {
+      const body = el("div", { className: "rt-body" }, el("b", { textContent: r.name }));
+      const meta = recipeMeta(r);
+      if (meta.length) body.append(el("small", { textContent: meta.join(" · ") }));
+      const tile = el("button", { type: "button", className: "recipe-tile" }, recipePic(r), body);
+      tile.addEventListener("click", () => openRecipe(r));
+      return tile;
+    }));
+    $("recipe-search").hidden = rs.items.length === 0;
+    const empty = $("recipe-empty");
+    empty.hidden = list.length > 0;
+    empty.textContent = !rs.items.length
+      ? (rs.error || "Noch keine Rezepte. Tippe unten auf „Rezept“ zum Eintippen oder oben auf „Aus Foto“.")
+      : "Kein Rezept passt zur Suche.";
+  }
+  $("recipe-q").addEventListener("input", () => { rs.query = $("recipe-q").value; renderRecipes(); });
+  $("recipe-search").addEventListener("submit", (e) => { e.preventDefault(); $("recipe-q").blur(); });
+
+  // Rezept öffnen: sofort mit den Daten aus der Liste, das vollständige Rezept (Foto, Schritte) kommt gleich danach
+  async function openRecipe(r) {
+    const id = r.id;
+    if (rs.openId !== id) rs.got = new Set();
+    rs.openId = id;
+    if (!rs.open || rs.open.id !== id) rs.open = { ...r, steps: [], note: "", partial: true };
+    renderRecipeDetail();
+    if (currentView !== "recipe") showTab("recipe");
+    try {
+      const full = await api(`/api/recipes/${id}`);
+      if (rs.openId !== id) return; // inzwischen ein anderes Rezept geöffnet
+      rs.open = full;
+      renderRecipeDetail();
+    } catch (e) {
+      if (rs.openId !== id) return;
+      showToast(e.status === 404 ? "Dieses Rezept gibt es nicht mehr." : e.message);
+      if (e.status === 404) { showTab("recipes"); loadRecipes(true); }
+    }
+  }
+
+  function renderRecipeDetail() {
+    const r = rs.open;
+    if (!r) return;
+    $("rd-name").textContent = r.name;
+    $("rd-hero").replaceChildren(...(r.photo || r.thumb ? [recipePic(r, true)] : []));
+    const cat = recipeCat(r.category);
+    $("rd-meta").replaceChildren(...[`${cat.emoji} ${cat.label}`, ...recipeMeta(r, true)].map((t) => el("span", { textContent: t })));
+    const ing = r.ingredients || [];
+    $("rd-ing-head").hidden = $("rd-ingredients").hidden = $("rd-hint").hidden = !ing.length;
+    $("rd-ingredients").replaceChildren(...ing.map((text, i) => {
+      // Zeilen wie „Für den Teig:“ sind Zwischenüberschriften
+      if (/:\s*$/.test(text)) return el("li", { className: "rd-sub", textContent: text.replace(/:\s*$/, "") });
+      const li = el("li", { tabIndex: 0 }, el("span", { className: "rd-tick", ariaHidden: "true" }), el("span", { className: "rd-txt", textContent: text }));
+      li.setAttribute("role", "checkbox");
+      const paint = () => { li.classList.toggle("got", rs.got.has(i)); li.setAttribute("aria-checked", String(rs.got.has(i))); };
+      const toggle = () => { if (rs.got.has(i)) rs.got.delete(i); else rs.got.add(i); paint(); };
+      li.addEventListener("click", toggle);
+      li.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); } });
+      paint();
+      return li;
+    }));
+    const steps = r.steps || [];
+    $("rd-steps-head").hidden = $("rd-steps").hidden = !steps.length;
+    $("rd-steps").replaceChildren(...steps.map((s) => el("li", { textContent: s })));
+    $("rd-note").hidden = !r.note;
+    $("rd-note-text").textContent = r.note || "";
+    requestAnimationFrame(updateNavbar);
+  }
+
+  // ---------- Rezept-Formular (von Hand oder von der KI vorausgefüllt) ----------
+  let editingRecipe = null;
+  let recipeCatKey = "other";
+  const recipePhoto = { photo: null, thumb: null }; // photo: null = unverändert, "" = entfernen, sonst neues JPEG (Base64)
+
+  RECIPE_CATS.forEach((c) => {
+    const b = el("button", { type: "button", textContent: `${c.emoji} ${c.label}` });
+    b.dataset.cat = c.key;
+    b.setAttribute("role", "radio");
+    b.addEventListener("click", () => setRecipeCat(c.key));
+    $("r-cats").append(b);
+  });
+  function setRecipeCat(key) {
+    recipeCatKey = key;
+    $("r-cats").querySelectorAll("button").forEach((b) => {
+      b.classList.toggle("on", b.dataset.cat === key);
+      b.setAttribute("aria-checked", String(b.dataset.cat === key));
+    });
+  }
+
+  function showRecipePhoto(src) {
+    const img = $("r-photo-img");
+    img.hidden = !src;
+    if (src) img.src = src; else img.removeAttribute("src");
+    $("r-photo-empty").hidden = !!src;
+    $("r-photo-box").classList.toggle("has", !!src);
+    $("r-photo-actions").hidden = !src;
+  }
+
+  function openRecipeSheet(r = null, draft = null) {
+    $("recipe-sheet").reset();
+    editingRecipe = r;
+    const d = r || draft || {};
+    $("r-heading").textContent = r ? "Rezept bearbeiten" : draft ? "Rezept prüfen" : "Neues Rezept";
+    const lead = draft ? `Von der KI ausgefüllt. Prüfe alles, gib dem Rezept deinen Namen und ein eigenes Foto, dann speichern.${draft.remarks ? ` Hinweis der KI: ${draft.remarks}` : ""}` : "";
+    $("r-lead").textContent = lead;
+    $("r-lead").hidden = !lead;
+    $("r-name").value = d.name || "";
+    setRecipeCat(d.category || "other");
+    $("r-minutes").value = d.minutes || "";
+    $("r-servings").value = d.servings || "";
+    $("r-ingredients").value = (d.ingredients || []).join("\n");
+    $("r-steps").value = (d.steps || []).join("\n");
+    $("r-note").value = d.note || "";
+    recipePhoto.photo = null;
+    recipePhoto.thumb = null;
+    showRecipePhoto(r && (r.photo || r.thumb) ? jpegSrc(r.photo || r.thumb) : "");
+    $("r-delete").hidden = !r;
+    $("r-error").hidden = true;
+    $("r-submit").disabled = false;
+    $("sheet-backdrop").hidden = false;
+    $("recipe-sheet").hidden = false;
+    $("recipe-sheet").scrollTop = 0;
+    if (!r && !draft) setTimeout(() => $("r-name").focus(), 50);
+  }
+
+  // Eigenes Foto: verkleinert (längste Seite 1200 px) plus Vorschau als mittiger 4:3-Ausschnitt (480 × 360)
+  async function makeRecipePhoto(file) {
+    let bmp;
+    try { bmp = await createImageBitmap(file); } catch { throw new Error("Dieses Bild kann nicht gelesen werden. Bitte ein JPG oder PNG wählen."); }
+    const draw = async (w, h, sx, sy, sw, sh, quality) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, w, h);
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+      if (!blob) throw new Error("Das Foto konnte nicht verkleinert werden.");
+      return blobToBase64(blob);
+    };
+    try {
+      const scale = Math.min(1, 1200 / Math.max(bmp.width, bmp.height));
+      const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale);
+      let photo = "";
+      for (const q of [0.8, 0.65, 0.5]) { // Grenze des Servers: 900 000 Zeichen
+        photo = await draw(w, h, 0, 0, bmp.width, bmp.height, q);
+        if (photo.length < 880000) break;
+      }
+      let sw = bmp.width, sh = bmp.height;
+      if (sw / sh > 4 / 3) sw = sh * 4 / 3; else sh = sw * 3 / 4;
+      const thumb = await draw(480, 360, (bmp.width - sw) / 2, (bmp.height - sh) / 2, sw, sh, 0.74);
+      return { photo, thumb };
+    } finally { if (bmp.close) bmp.close(); }
+  }
+
+  async function setRecipePhoto(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    $("r-error").hidden = true;
+    $("r-submit").disabled = true;
+    try {
+      const p = await makeRecipePhoto(file);
+      Object.assign(recipePhoto, p);
+      showRecipePhoto(jpegSrc(p.photo));
+    } catch (e) { $("r-error").textContent = e.message; $("r-error").hidden = false; }
+    finally { $("r-submit").disabled = false; }
+  }
+  $("r-photo").addEventListener("change", (e) => { setRecipePhoto(e.target.files[0]); e.target.value = ""; });
+  $("r-photo-change").addEventListener("click", () => $("r-photo").click());
+  $("r-photo-remove").addEventListener("click", () => { recipePhoto.photo = ""; recipePhoto.thumb = ""; showRecipePhoto(""); });
+
+  $("recipe-sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const showErr = (m) => { $("r-error").textContent = m; $("r-error").hidden = false; $("r-error").scrollIntoView({ block: "nearest", behavior: "smooth" }); };
+    const num = (id, lo, hi, label) => {
+      const v = $(id).value.trim();
+      if (!v) return null;
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`${label}: bitte eine ganze Zahl von ${lo} bis ${hi}.`);
+      return n;
+    };
+    let body;
+    try {
+      body = {
+        name: $("r-name").value.trim(),
+        category: recipeCatKey,
+        minutes: num("r-minutes", 1, 1440, "Dauer"),
+        servings: num("r-servings", 1, 100, "Portionen"),
+        ingredients: recipeLines($("r-ingredients").value),
+        steps: recipeLines($("r-steps").value),
+        note: $("r-note").value.trim(),
+        photo: recipePhoto.photo,
+        thumb: recipePhoto.thumb,
+      };
+    } catch (ex) { showErr(ex.message); return; }
+    if (!body.name) { showErr("Bitte gib dem Rezept einen Namen."); $("r-name").focus(); return; }
+    if (body.ingredients.length > 100 || body.steps.length > 60) { showErr("Das Rezept ist zu lang (höchstens 100 Zutaten und 60 Schritte)."); return; }
+    if (body.ingredients.some((x) => x.length > 200)) { showErr("Eine Zutat ist zu lang (höchstens 200 Zeichen pro Zeile)."); return; }
+    if (body.steps.some((x) => x.length > 1000)) { showErr("Ein Schritt ist zu lang (höchstens 1000 Zeichen pro Zeile)."); return; }
+    $("r-error").hidden = true;
+    $("r-submit").disabled = true;
+    const editing = editingRecipe;
+    try {
+      const saved = await api(editing ? `/api/recipes/${editing.id}` : "/api/recipes", { method: editing ? "PUT" : "POST", body });
+      closeSheet();
+      rs.got = new Set();
+      rs.open = saved;
+      rs.openId = saved.id;
+      renderRecipeDetail();
+      if (currentView !== "recipe") showTab("recipe");
+      showToast(editing ? "Rezept gespeichert." : "Rezept angelegt.");
+      loadRecipes(true);
+    } catch (ex) { showErr(ex.message); $("r-submit").disabled = false; }
+  });
+
+  async function deleteRecipe(r, fromSheet = false) {
+    if (!r || !confirm(`Rezept „${r.name}" löschen?`)) return;
+    try {
+      await api(`/api/recipes/${r.id}`, { method: "DELETE" });
+      if (fromSheet) closeSheet();
+      rs.items = rs.items.filter((x) => x.id !== r.id);
+      rs.open = null;
+      rs.openId = null;
+      showTab("recipes"); // lädt die Liste neu
+      showToast("Rezept gelöscht.");
+    } catch (e) { alert(e.message); }
+  }
+
+  // ---------- Rezept aus Foto: die KI füllt das Formular vor, gespeichert wird erst nach Prüfung ----------
+  const RI_MAX_FILES = 3, RI_MAX_PIECES = 6;
+  let riFiles = [];
+
+  function renderRecipeThumbs() {
+    $("ri-thumbs").replaceChildren(...riFiles.map((f, i) => {
+      const img = el("img", { alt: f.name || "Bild", src: URL.createObjectURL(f) });
+      img.onload = () => URL.revokeObjectURL(img.src);
+      const x = el("button", { type: "button", textContent: "✕", ariaLabel: "Bild entfernen" });
+      x.addEventListener("click", () => { riFiles.splice(i, 1); renderRecipeThumbs(); });
+      return el("div", { className: "thumb" }, img, x);
+    }));
+    $("ri-submit").disabled = riFiles.length === 0;
+  }
+
+  function addRecipeFiles(files) {
+    const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+    if (!imgs.length) return;
+    riFiles = [...riFiles, ...imgs].slice(0, RI_MAX_FILES);
+    $("ri-error").hidden = true;
+    renderRecipeThumbs();
+  }
+
+  function openRecipeImport(files = []) {
+    impSession++;
+    riFiles = [];
+    $("rimport-sheet").reset();
+    $("ri-status").textContent = "";
+    $("ri-error").hidden = true;
+    renderRecipeThumbs();
+    addRecipeFiles(files);
+    $("sheet-backdrop").hidden = false;
+    $("rimport-sheet").hidden = false;
+  }
+
+  $("ri-file").addEventListener("change", (e) => { addRecipeFiles(e.target.files); e.target.value = ""; });
+  const riDrop = $("ri-drop");
+  riDrop.addEventListener("dragover", (e) => { e.preventDefault(); riDrop.classList.add("drag"); });
+  riDrop.addEventListener("dragleave", () => riDrop.classList.remove("drag"));
+  riDrop.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); riDrop.classList.remove("drag"); $("drop-overlay").hidden = true; addRecipeFiles(e.dataTransfer.files); });
+
+  $("rimport-sheet").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!riFiles.length) return;
+    const session = ++impSession;
+    $("ri-error").hidden = true;
+    $("ri-submit").disabled = true;
+    try {
+      $("ri-status").textContent = "Bilder werden vorbereitet …";
+      const images = [];
+      for (const f of riFiles) images.push(...(await fileToPieces(f)));
+      if (images.length > RI_MAX_PIECES) throw new Error("Die Bilder sind zu lang oder zu viele. Bitte zuschneiden oder weniger Bilder wählen.");
+      $("ri-status").textContent = "KI liest das Rezept … (das kann bis zu einer Minute dauern)";
+      const draft = await api("/api/recipes/analyze", { method: "POST", body: { images } });
+      if (session !== impSession) return; // inzwischen geschlossen
+      closeSheet();
+      openRecipeSheet(null, draft);
+    } catch (ex) {
+      if (session !== impSession) return;
+      $("ri-status").textContent = "";
+      $("ri-error").textContent = ex.message;
+      $("ri-error").hidden = false;
+      $("ri-submit").disabled = riFiles.length === 0;
+    }
+  });
+
+  $("recipe-card").addEventListener("click", () => showTab("recipes"));
+  $("recipe-card").addEventListener("keydown", (e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showTab("recipes"); } });
+  $("recipes-back").addEventListener("click", () => showTab("today"));
+  $("recipe-back").addEventListener("click", () => showTab("recipes"));
+  $("recipe-photo-btn").addEventListener("click", () => openRecipeImport());
+  $("recipe-fab").addEventListener("click", () => openRecipeSheet());
+  $("r-cancel").addEventListener("click", closeSheet);
+  $("ri-cancel").addEventListener("click", closeSheet);
+  $("r-delete").addEventListener("click", () => deleteRecipe(editingRecipe, true));
+  $("rd-delete").addEventListener("click", () => deleteRecipe(rs.open));
+  $("rd-edit").addEventListener("click", async () => {
+    if (!rs.open) return;
+    if (rs.open.partial) {
+      try { rs.open = await api(`/api/recipes/${rs.open.id}`); } catch (e) { showToast(e.message); return; }
+    }
+    openRecipeSheet(rs.open);
+  });
 
   // ---------- Mein Bild (Figur wählen) ----------
   let myAvatar = store.get("avatar", "");
@@ -2496,11 +2890,13 @@
   // Im Kalender: auf dem Raster wechselt der Monat, darüber und darunter der Tab
   tabSwipe($("view-calendar"), { prev: "today", next: "plan", exclude: "#cal-grid, .cal-weekdays, .friend-bubbles" });
 
-  // Nach unten ziehen zum Aktualisieren (Heute, Kalender, Börse)
+  // Nach unten ziehen zum Aktualisieren (Heute, Kalender, Börse, Rezepte)
   const PULL_REFRESH = {
-    today: () => Promise.all([renderToday(), loadMarket(true)]),
+    today: () => Promise.all([renderToday(), loadMarket(true), loadRecipes(true)]),
     calendar: () => loadMonth(),
     market: () => Promise.all([loadMarket(true), loadBriefing()]),
+    recipes: () => loadRecipes(true),
+    recipe: () => (rs.open ? openRecipe(rs.open) : Promise.resolve()),
   };
   {
     const ptr = el("div", { className: "ptr", id: "ptr", ariaHidden: "true" });
@@ -2564,10 +2960,11 @@
   });
 
   // ---------- Kompakte Kopfzeile beim Scrollen (große Titel wie in iOS) ----------
-  const VIEW_TITLE = { today: "Heute", calendar: "Kalender", plan: "Stundenplan", todos: "Aufgaben", chat: "Assistent", market: "Börse", friends: "Freunde" };
+  const VIEW_TITLE = { today: "Heute", calendar: "Kalender", plan: "Stundenplan", todos: "Aufgaben", chat: "Assistent", market: "Börse", friends: "Freunde", recipes: "Rezepte" };
   function navTitle() {
     if (currentView === "todos" && todoState.openId !== null) return $("td-name").textContent;
     if (currentView === "friend") return $("fv-name").textContent;
+    if (currentView === "recipe") return $("rd-name").textContent;
     if (currentView === "calendar") return $("cal-title").textContent;
     return VIEW_TITLE[currentView] || "";
   }
@@ -2589,6 +2986,7 @@
     $("app").hidden = false;
     $("tabbar").hidden = false;
     renderHistory();
+    Object.assign(rs, { items: [], loadedAt: 0, error: "", open: null, openId: null }); // gehören zum Konto
     showTab(store.get("tab", "today"), { animate: false });
     loadFriends();
     takeSharedText();

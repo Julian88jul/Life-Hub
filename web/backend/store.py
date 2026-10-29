@@ -3,6 +3,7 @@
   SUPABASE_SERVICE_KEY gesetzt sind.
 * SQLite-Datei für die lokale Entwicklung.
 Alle Daten gehören zu einem Nutzer (user_id)."""
+import json
 import os
 import sqlite3
 import time
@@ -15,6 +16,17 @@ TODO_PATCH_FIELDS = ("done", "title", "due_date")
 LIST_PATCH_FIELDS = ("name", "emoji", "color")
 CLASS_FIELDS = ("title", "weekday", "start_time", "end_time", "room", "color", "icon")
 SHARE_FIELDS = ("calendar", "timetable", "todos")
+RECIPE_FIELDS = ("name", "category", "minutes", "servings", "ingredients", "steps", "note")
+RECIPE_LIST_FIELDS = "id,name,category,minutes,servings,ingredients,thumb"  # ohne großes Foto
+
+
+def _recipe(row) -> dict:
+    """SQLite speichert Zutaten und Schritte als JSON-Text; nach außen sind es Listen."""
+    d = dict(row)
+    for k in ("ingredients", "steps"):
+        if k in d:
+            d[k] = json.loads(d[k] or "[]")
+    return d
 
 
 def _event(row) -> dict:
@@ -168,6 +180,21 @@ class SqliteStore:
                     todos INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (owner_id, viewer_id))"""
             )
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS recipes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'other',
+                    minutes INTEGER,
+                    servings INTEGER,
+                    ingredients TEXT NOT NULL DEFAULT '[]',
+                    steps TEXT NOT NULL DEFAULT '[]',
+                    note TEXT NOT NULL DEFAULT '',
+                    photo TEXT NOT NULL DEFAULT '',
+                    thumb TEXT NOT NULL DEFAULT '')"""
+            )
+            c.execute("CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)")
 
     # --- Nutzer ---
     def create_user(self, username, password_hash):
@@ -328,6 +355,46 @@ class SqliteStore:
     def delete_class(self, user_id, class_id):
         with self._db() as c:
             return c.execute("DELETE FROM timetable WHERE id=? AND user_id=?", (class_id, user_id)).rowcount > 0
+
+    # --- Rezepte ---
+    def list_recipes(self, user_id):
+        with self._db() as c:
+            rows = c.execute(f"SELECT {RECIPE_LIST_FIELDS} FROM recipes WHERE user_id=? ORDER BY name COLLATE NOCASE, id", (user_id,)).fetchall()
+        return [_recipe(r) for r in rows]
+
+    def get_recipe(self, user_id, recipe_id):
+        with self._db() as c:
+            row = c.execute("SELECT * FROM recipes WHERE id=? AND user_id=?", (recipe_id, user_id)).fetchone()
+        return _recipe(row) if row else None
+
+    @staticmethod
+    def _recipe_values(r):
+        return tuple(json.dumps(r[f], ensure_ascii=False) if f in ("ingredients", "steps") else r[f] for f in RECIPE_FIELDS)
+
+    def create_recipe(self, user_id, r):
+        with self._db() as c:
+            cur = c.execute(
+                "INSERT INTO recipes(user_id,name,category,minutes,servings,ingredients,steps,note,photo,thumb) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (user_id, *self._recipe_values(r), r.get("photo") or "", r.get("thumb") or ""),
+            )
+            new_id = cur.lastrowid
+        return self.get_recipe(user_id, new_id)
+
+    def update_recipe(self, user_id, recipe_id, r):
+        """`photo` None = Foto behalten, "" = entfernen, sonst ersetzen (immer zusammen mit `thumb`)."""
+        sets = ",".join(f"{f}=?" for f in RECIPE_FIELDS)
+        values = list(self._recipe_values(r))
+        if r.get("photo") is not None:
+            sets += ",photo=?,thumb=?"
+            values += [r["photo"], r.get("thumb") or ""]
+        with self._db() as c:
+            if c.execute(f"UPDATE recipes SET {sets} WHERE id=? AND user_id=?", (*values, recipe_id, user_id)).rowcount == 0:
+                return None
+        return self.get_recipe(user_id, recipe_id)
+
+    def delete_recipe(self, user_id, recipe_id):
+        with self._db() as c:
+            return c.execute("DELETE FROM recipes WHERE id=? AND user_id=?", (recipe_id, user_id)).rowcount > 0
 
     # --- Börse ---
     def list_watchlist(self, user_id):
@@ -569,6 +636,34 @@ class SupabaseStore:
         r.raise_for_status()
         return bool(r.json())
 
+    # --- Rezepte (Zutaten und Schritte liegen als jsonb vor und kommen schon als Listen zurück) ---
+    def list_recipes(self, user_id):
+        return self._get("recipes", {"user_id": f"eq.{user_id}", "select": RECIPE_LIST_FIELDS, "order": "name.asc,id.asc"})
+
+    def get_recipe(self, user_id, recipe_id):
+        rows = self._get("recipes", {"id": f"eq.{recipe_id}", "user_id": f"eq.{user_id}"})
+        return rows[0] if rows else None
+
+    def create_recipe(self, user_id, r):
+        body = {"user_id": user_id, **{f: r[f] for f in RECIPE_FIELDS}, "photo": r.get("photo") or "", "thumb": r.get("thumb") or ""}
+        resp = self.http.post("/recipes", json=body, headers=self.REP)
+        resp.raise_for_status()
+        return resp.json()[0]
+
+    def update_recipe(self, user_id, recipe_id, r):
+        body = {f: r[f] for f in RECIPE_FIELDS}
+        if r.get("photo") is not None:  # None = Foto behalten
+            body.update(photo=r["photo"], thumb=r.get("thumb") or "")
+        resp = self.http.patch("/recipes", params={"id": f"eq.{recipe_id}", "user_id": f"eq.{user_id}"}, json=body, headers=self.REP)
+        resp.raise_for_status()
+        rows = resp.json()
+        return rows[0] if rows else None
+
+    def delete_recipe(self, user_id, recipe_id):
+        r = self.http.delete("/recipes", params={"id": f"eq.{recipe_id}", "user_id": f"eq.{user_id}"}, headers=self.REP)
+        r.raise_for_status()
+        return bool(r.json())
+
     def clear_done(self, user_id, list_id):
         r = self.http.delete("/todos", params={"list_id": f"eq.{list_id}", "user_id": f"eq.{user_id}", "done": "eq.true"}, headers=self.REP)
         r.raise_for_status()
@@ -688,6 +783,11 @@ list_classes = _impl.list_classes
 create_class = _impl.create_class
 update_class = _impl.update_class
 delete_class = _impl.delete_class
+list_recipes = _impl.list_recipes
+get_recipe = _impl.get_recipe
+create_recipe = _impl.create_recipe
+update_recipe = _impl.update_recipe
+delete_recipe = _impl.delete_recipe
 get_friendship = _impl.get_friendship
 create_friendship = _impl.create_friendship
 accept_friendship = _impl.accept_friendship

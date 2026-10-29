@@ -147,6 +147,37 @@ async def analyze_text(text: str, prompt: str) -> dict:
     return out if isinstance(out, dict) else {}
 
 
+RECIPE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "name": {"type": "STRING"},
+        "category": {"type": "STRING", "enum": ["breakfast", "main", "side", "dessert", "baking", "snack", "drink", "other"]},
+        "minutes": {"type": "INTEGER", "nullable": True},
+        "servings": {"type": "INTEGER", "nullable": True},
+        "ingredients": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "steps": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "note": {"type": "STRING", "nullable": True},
+        "remarks": {"type": "STRING", "nullable": True},
+    },
+    "required": ["name", "category", "ingredients", "steps"],
+}
+
+
+async def analyze_recipe(images_b64: list[str], prompt: str) -> dict:
+    """Ein Rezept aus einem oder mehreren Bildern (z. B. zwei Kochbuchseiten) lesen; JSON nach RECIPE_SCHEMA."""
+    import json
+    import re
+
+    parts = [{"text": prompt}] + [{"inline_data": {"mime_type": "image/jpeg", "data": b}} for b in images_b64]
+    data = await _generate(parts, {"responseMimeType": "application/json", "responseSchema": RECIPE_SCHEMA, "temperature": 0.1})
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", _text_of(data))
+    try:
+        out = json.loads(raw)
+    except ValueError:
+        raise LLMError("Die Antwort der KI war nicht lesbar. Bitte nochmal versuchen (oder ein klareres Bild nehmen).") from None
+    return out if isinstance(out, dict) else {}
+
+
 async def transcribe(audio_b64: str, mime: str) -> str:
     """Sprachaufnahme in Text umwandeln (Deutsch)."""
     prompt = ("Schreibe genau auf, was in dieser Sprachaufnahme gesagt wird, auf Deutsch, mit Satzzeichen. "

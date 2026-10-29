@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=37">
+  <link rel="stylesheet" href="style.css?v=38">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -103,6 +103,14 @@
         <p class="mc-lage" id="mc-lage">Briefing wird geladen …</p>
         <ul class="mc-movers" id="mc-movers"></ul>
         <p class="mc-next" id="mc-next" hidden></p>
+      </div>
+      <div class="card recipe-home" id="recipe-card" role="button" tabindex="0" aria-label="Rezepte öffnen">
+        <div class="row-between">
+          <h2>Rezepte</h2>
+          <span class="mc-open" aria-hidden="true">›</span>
+        </div>
+        <div class="rc-strip" id="rc-strip"></div>
+        <p class="rc-sub" id="rc-sub">Von Hand oder per Foto eintragen.</p>
       </div>
       <div class="tiles">
         <div class="tile disabled"><span>✉️</span><b>E-Mails</b><small>bald</small></div>
@@ -340,6 +348,44 @@
       <div id="fv-todos" hidden></div>
     </section>
 
+    <section id="view-recipes" class="view" aria-label="Rezepte">
+      <header class="detail-head">
+        <button type="button" class="icon-btn" id="recipes-back" aria-label="Zurück">‹</button>
+        <div class="detail-title"><h1>Rezepte</h1></div>
+        <div class="top-actions">
+          <button type="button" class="chip" id="recipe-photo-btn" aria-label="Rezept aus Foto erkennen">📷 Aus Foto</button>
+        </div>
+      </header>
+      <form class="inline-form recipe-search" id="recipe-search" role="search" autocomplete="off">
+        <input id="recipe-q" type="search" placeholder="Rezept oder Zutat suchen" aria-label="Rezept oder Zutat suchen" maxlength="60" enterkeyhint="search">
+      </form>
+      <div class="chips recipe-filter" id="recipe-filter" role="group" aria-label="Kategorie"></div>
+      <div class="recipe-grid" id="recipe-grid"></div>
+      <p class="hint" id="recipe-empty" hidden></p>
+    </section>
+
+    <section id="view-recipe" class="view" aria-label="Rezept">
+      <header class="detail-head">
+        <button type="button" class="icon-btn" id="recipe-back" aria-label="Zurück zu den Rezepten">‹</button>
+        <div class="detail-title"><h1 id="rd-name"></h1></div>
+        <div class="top-actions">
+          <button type="button" class="icon-btn" id="rd-edit" aria-label="Rezept bearbeiten">✏️</button>
+          <button type="button" class="icon-btn" id="rd-delete" aria-label="Rezept löschen">🗑</button>
+        </div>
+      </header>
+      <div class="rd-hero" id="rd-hero"></div>
+      <div class="rd-meta" id="rd-meta"></div>
+      <h2 class="section-head" id="rd-ing-head">Zutaten</h2>
+      <ul class="card rd-ingredients" id="rd-ingredients"></ul>
+      <h2 class="section-head" id="rd-steps-head">Zubereitung</h2>
+      <ol class="rd-steps" id="rd-steps"></ol>
+      <div class="card rd-note" id="rd-note" hidden>
+        <h2>Notiz</h2>
+        <p id="rd-note-text"></p>
+      </div>
+      <p class="hint" id="rd-hint">Zutaten antippen, um sie beim Kochen abzuhaken.</p>
+    </section>
+
     <section id="view-chat" class="view" aria-label="Assistent">
       <div class="chat-top">
         <button type="button" class="chip" id="speak-toggle" aria-pressed="true">🔊 Vorlesen an</button>
@@ -392,6 +438,7 @@
 
   <button type="button" class="fab" id="task-fab" hidden><span aria-hidden="true">＋</span> Aufgabe</button>
   <button type="button" class="fab" id="plan-fab" hidden><span aria-hidden="true">＋</span> Eintrag</button>
+  <button type="button" class="fab" id="recipe-fab" hidden><span aria-hidden="true">＋</span> Rezept</button>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <div class="drop-overlay" id="drop-overlay" hidden><div>📷 Bild hier ablegen</div></div>
 
@@ -536,8 +583,61 @@
     <button type="button" class="text-btn wide danger" id="sh-remove">Freund entfernen</button>
   </form>
 
-  <script src="avatars.js?v=37"></script>
-  <script src="config.js?v=37"></script>
-  <script src="app.js?v=37"></script>
+  <form id="recipe-sheet" class="sheet" hidden novalidate>
+    <div class="grabber"></div>
+    <h2 id="r-heading">Neues Rezept</h2>
+    <p class="muted" id="r-lead" hidden></p>
+    <label class="rp-photo" id="r-photo-box">
+      <input id="r-photo" type="file" accept="image/*" hidden>
+      <img id="r-photo-img" alt="Foto des Rezepts" hidden>
+      <span class="rp-empty" id="r-photo-empty"><span class="dz-icon" aria-hidden="true">📷</span><b>Foto hinzufügen</b><small>Ein eigenes Bild vom Gericht (optional)</small></span>
+    </label>
+    <div class="rp-photo-actions" id="r-photo-actions" hidden>
+      <button type="button" class="text-btn" id="r-photo-change">Anderes Foto</button>
+      <button type="button" class="text-btn danger" id="r-photo-remove">Foto entfernen</button>
+    </div>
+    <label>Name<input id="r-name" type="text" maxlength="120" placeholder="z. B. Omas Apfelkuchen" autocomplete="off"></label>
+    <fieldset class="colors">
+      <legend>Kategorie</legend>
+      <div class="chips" id="r-cats" role="radiogroup" aria-label="Kategorie"></div>
+    </fieldset>
+    <div class="two">
+      <label>Dauer (Minuten)<input id="r-minutes" type="number" inputmode="numeric" min="1" max="1440" placeholder="z. B. 45"></label>
+      <label>Portionen<input id="r-servings" type="number" inputmode="numeric" min="1" max="100" placeholder="z. B. 4"></label>
+    </div>
+    <label>Zutaten (eine pro Zeile)<textarea id="r-ingredients" rows="6" placeholder="200 g Mehl&#10;2 Eier&#10;1 Prise Salz"></textarea></label>
+    <label>Zubereitung (ein Schritt pro Zeile)<textarea id="r-steps" rows="6" placeholder="Ofen auf 180 °C vorheizen.&#10;Mehl und Eier verrühren."></textarea></label>
+    <label>Notiz (optional)<textarea id="r-note" rows="2" maxlength="2000" placeholder="z. B. Mit Vanilleeis servieren"></textarea></label>
+    <p class="error" id="r-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="r-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary" id="r-submit">Speichern</button>
+    </div>
+    <button type="button" class="text-btn wide danger" id="r-delete" hidden>Rezept löschen</button>
+  </form>
+
+  <form id="rimport-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2>Rezept aus Foto</h2>
+    <p class="muted">Foto oder Screenshot eines Rezepts, z. B. aus einem Kochbuch. Geht es über mehrere Seiten, wähle alle Bilder. Die KI füllt das Formular vor, du prüfst und speicherst.</p>
+    <label class="dropzone" id="ri-drop">
+      <input id="ri-file" type="file" accept="image/*" multiple hidden>
+      <span class="dz-icon" aria-hidden="true">📷</span>
+      <b>Bild auswählen</b>
+      <small>oder hierher ziehen oder mit Strg+V einfügen (bis zu 3 Bilder)</small>
+    </label>
+    <div class="imp-thumbs" id="ri-thumbs"></div>
+    <p class="muted" id="ri-status"></p>
+    <p class="error" id="ri-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="ri-cancel">Abbrechen</button>
+      <button type="submit" class="btn primary" id="ri-submit" disabled>Erkennen</button>
+    </div>
+    <p class="hint left">Bilder werden zur Auswertung an Google Gemini gesendet. Keine Bilder mit vertraulichen Inhalten verwenden.</p>
+  </form>
+
+  <script src="avatars.js?v=38"></script>
+  <script src="config.js?v=38"></script>
+  <script src="app.js?v=38"></script>
 </body>
 </html>

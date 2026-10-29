@@ -1156,3 +1156,106 @@ body.nav-compact .top h1, body.nav-compact .detail-title h1 { opacity: .25; }
 @media (prefers-reduced-motion: reduce) {
   .navbar, .top h1, .detail-title h1 { transition: none; }
 }
+
+/* ---------- Rezepte ---------- */
+/* Bild eines Rezepts: eigenes Foto, sonst ruhig getönte Fläche mit dem Symbol der Kategorie */
+.rpic {
+  position: relative; display: grid; place-items: center; overflow: hidden; aspect-ratio: 4 / 3;
+  background: color-mix(in srgb, var(--c, var(--accent)) 16%, var(--surface));
+}
+.rpic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.rpic-emoji { font-size: 34px; line-height: 1; }
+
+/* Karte auf „Heute“ */
+.recipe-home { cursor: pointer; }
+.rc-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 2px 0 10px; }
+.rc-strip:empty { display: none; }
+.rc-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rc-item .rpic { aspect-ratio: 1; border-radius: 14px; border: 1px solid var(--line); }
+.rc-item .rpic-emoji { font-size: 26px; }
+.rc-item small { font-size: 12px; font-weight: 600; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-sub { color: var(--muted); font-size: 14px; }
+
+/* Übersicht */
+.recipe-search { margin-bottom: 10px; }
+.recipe-search input { background: var(--surface); }
+.recipe-filter { margin: 0 0 12px; }
+.recipe-filter button { font-size: 14px; font-weight: 600; color: var(--muted); background: var(--surface); }
+.recipe-filter button.on { color: var(--accent); }
+.recipe-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.recipe-tile {
+  display: flex; flex-direction: column; padding: 0; overflow: hidden; text-align: left; color: var(--text);
+  border-radius: 22px; background: var(--surface); border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+.recipe-tile .rpic { border-bottom: 1px solid var(--line); }
+.rt-body { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px 12px; min-width: 0; }
+.rt-body b {
+  font-size: 16px; font-weight: 700; line-height: 1.25; letter-spacing: -.01em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.rt-body small { color: var(--muted); font-size: 13px; }
+
+/* Einzelansicht */
+.rd-hero .rpic { border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow-sm); margin-bottom: 12px; }
+.rd-hero:empty { display: none; }
+.rd-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+.rd-meta:empty { display: none; }
+.rd-meta span {
+  padding: 6px 12px; border-radius: 999px; font-size: 14px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--line);
+}
+.rd-ingredients { list-style: none; margin: 0; padding: 2px 16px; }
+.rd-ingredients li {
+  display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 0;
+  border-top: 1px solid var(--line); cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+.rd-ingredients li:first-child { border-top: 0; }
+.rd-tick {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line-strong);
+  transition: background .2s, border-color .2s;
+}
+.rd-ingredients li.got .rd-tick {
+  border-color: var(--accent);
+  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m6.5 12.5 3.5 3.5 7.5-8' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 15px no-repeat;
+}
+.rd-txt { transition: color .2s; }
+.rd-ingredients li.got .rd-txt { color: var(--muted); text-decoration: line-through; }
+.rd-ingredients li.rd-sub {
+  cursor: default; min-height: 0; padding: 14px 0 4px; font-size: 12px; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
+}
+.rd-ingredients li.rd-sub + li { border-top: 0; }
+.rd-steps { list-style: none; margin: 0 0 14px; padding: 0; counter-reset: step; display: flex; flex-direction: column; gap: 10px; }
+.rd-steps li {
+  position: relative; padding: 14px 16px 14px 54px; line-height: 1.55; border-radius: 18px;
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+}
+.rd-steps li::before {
+  counter-increment: step; content: counter(step); position: absolute; left: 14px; top: 13px;
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 14px; font-weight: 800; color: var(--accent); background: var(--accent-soft);
+}
+.rd-note p { white-space: pre-wrap; line-height: 1.55; }
+
+/* Formular: eigenes Foto */
+.sheet .rp-photo {
+  position: relative; display: block; aspect-ratio: 16 / 10; margin: 0 0 6px; overflow: hidden; cursor: pointer;
+  border-radius: 18px; border: 1.5px dashed var(--line-strong); background: var(--surface); color: var(--text); font-size: 15px;
+}
+.sheet .rp-photo.has { border-style: solid; border-color: var(--line); }
+.rp-photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.rp-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; text-align: center; padding: 12px; }
+.rp-empty small { color: var(--muted); font-size: 13px; }
+.rp-photo-actions { display: flex; justify-content: space-between; margin: -4px 0 6px; }
+.sheet textarea { resize: vertical; line-height: 1.45; }
+#r-cats { margin-bottom: 0; }
+
+/* Druck-Feedback wie bei den anderen Listen */
+.recipe-home, .recipe-tile, .rc-item .rpic, .rd-ingredients li { transition: transform .15s var(--ios-ease), background-color .15s; }
+.recipe-home:active { transform: scale(.985); }
+.recipe-tile:active, .rc-item:active .rpic { transform: scale(.97); }
+.rd-ingredients li:not(.rd-sub):active { background-color: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) {
+  .recipe-home, .recipe-tile, .rc-item .rpic, .rd-ingredients li, .rd-tick, .rd-txt { transition: none; }
+}

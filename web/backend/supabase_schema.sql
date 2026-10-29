@@ -122,3 +122,24 @@ alter table watchlist enable row level security;
 alter table market_briefings enable row level security;
 grant all on watchlist, market_briefings to service_role;
 grant all on all sequences in schema public to service_role;
+
+-- ---------- Rezepte (Update: bei bestehendem Projekt ausführen) ----------
+-- Foto und Vorschaubild liegen als JPEG (Base64) direkt in der Zeile; der Browser verkleinert sie vorher.
+create table if not exists recipes (
+  id bigint generated always as identity primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  name text not null,
+  category text not null default 'other',
+  minutes int check (minutes between 1 and 1440),
+  servings int check (servings between 1 and 100),
+  ingredients jsonb not null default '[]'::jsonb,
+  steps jsonb not null default '[]'::jsonb,
+  note text not null default '',
+  photo text not null default '',
+  thumb text not null default '',
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_recipes_user on recipes(user_id);
+alter table recipes enable row level security;
+grant all on recipes to service_role;
+grant all on all sequences in schema public to service_role;
