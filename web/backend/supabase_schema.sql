@@ -143,3 +143,7 @@ create index if not exists idx_recipes_user on recipes(user_id);
 alter table recipes enable row level security;
 grant all on recipes to service_role;
 grant all on all sequences in schema public to service_role;
+
+-- ---------- Startseite anpassen (Update: bei bestehendem Projekt ausführen) ----------
+-- Reihenfolge und ausgeblendete Widgets/Tabs als JSON, leer = Standard
+alter table users add column if not exists layout text not null default '';

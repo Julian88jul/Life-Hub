@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=38">
+  <link rel="stylesheet" href="style.css?v=39">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -40,6 +40,12 @@
     <button type="button" class="nav-back" id="nav-back" tabindex="-1" hidden>‹ Zurück</button>
     <span class="nav-title" id="nav-title"></span>
   </header>
+  <!-- Bearbeiten-Modus der Startseite (wie das Anpassen des iPhone-Home-Bildschirms) -->
+  <div class="edit-bar" id="edit-bar" hidden>
+    <button type="button" class="icon-btn small" id="edit-add" aria-label="Widget hinzufügen">＋</button>
+    <span class="edit-title">Startseite anpassen</span>
+    <button type="button" class="chip edit-done" id="edit-done">Fertig</button>
+  </div>
   <main id="app" hidden>
     <section id="view-today" class="view active" aria-label="Heute">
       <header class="top">
@@ -53,7 +59,6 @@
           <button type="button" class="icon-btn small" id="theme-btn" aria-label="Hell oder dunkel umschalten" title="Hell/Dunkel">🌓</button>
         </div>
       </header>
-      <button type="button" class="voice-hero" id="voice-hero"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span><b>Sprechen</b><small>„Trag morgen um 15 Uhr Zahnarzt ein“</small></span></button>
       <div class="card loc-panel" id="loc-panel" hidden>
         <form id="loc-form" class="inline-form">
           <input id="loc-input" type="search" placeholder="Ort suchen, z. B. Hamburg" autocomplete="off" aria-label="Ort suchen">
@@ -62,6 +67,13 @@
         <ul class="result-list" id="loc-results"></ul>
       </div>
 
+      <!-- Widgets: Reihenfolge und Sichtbarkeit legt jeder selbst fest (Startseite anpassen) -->
+      <div class="widgets" id="widgets">
+      <div class="widget" data-widget="voice">
+      <button type="button" class="voice-hero" id="voice-hero"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg><span><b>Sprechen</b><small>„Trag morgen um 15 Uhr Zahnarzt ein“</small></span></button>
+      </div>
+
+      <div class="widget" data-widget="weather">
       <div class="card">
         <div class="row-between">
           <h2 id="w-title">Wetter</h2>
@@ -73,7 +85,9 @@
         <div class="weather" id="weather"></div>
         <p class="hint left" id="w-msg"></p>
       </div>
+      </div>
 
+      <div class="widget" data-widget="classes">
       <div class="card" id="today-classes-card" hidden>
         <div class="row-between">
           <h2>Stundenplan heute</h2>
@@ -81,15 +95,21 @@
         </div>
         <ul class="class-list compact" id="today-classes"></ul>
       </div>
+      </div>
 
+      <div class="widget" data-widget="today">
       <div class="card">
         <h2>Heute</h2>
         <ul class="event-list" id="today-events"></ul>
       </div>
+      </div>
+      <div class="widget" data-widget="upcoming">
       <div class="card">
         <h2>Nächste 7 Tage</h2>
         <ul class="event-list" id="upcoming-events"></ul>
       </div>
+      </div>
+      <div class="widget" data-widget="market">
       <div class="card market-card" id="market-card" role="button" tabindex="0" aria-label="Börse öffnen">
         <div class="row-between">
           <h2>Börse</h2>
@@ -104,6 +124,8 @@
         <ul class="mc-movers" id="mc-movers"></ul>
         <p class="mc-next" id="mc-next" hidden></p>
       </div>
+      </div>
+      <div class="widget" data-widget="recipes">
       <div class="card recipe-home" id="recipe-card" role="button" tabindex="0" aria-label="Rezepte öffnen">
         <div class="row-between">
           <h2>Rezepte</h2>
@@ -112,15 +134,25 @@
         <div class="rc-strip" id="rc-strip"></div>
         <p class="rc-sub" id="rc-sub">Von Hand oder per Foto eintragen.</p>
       </div>
+      </div>
+      <div class="widget" data-widget="tiles">
       <div class="tiles">
         <div class="tile disabled"><span>✉️</span><b>E-Mails</b><small>bald</small></div>
         <div class="tile" data-goto="todos"><span>✅</span><b>Aufgaben</b><small id="tile-tasks-sub">öffnen</small></div>
         <div class="tile disabled"><span>💡</span><b>Licht</b><small>später</small></div>
         <div class="tile" data-goto="chat"><span>💬</span><b>Assistent</b><small>fragen</small></div>
       </div>
+      </div>
+      </div>
+      <p class="hint home-empty" id="home-empty" hidden>Alle Widgets sind ausgeblendet. Tippe unten auf „Startseite anpassen“, um welche hinzuzufügen.</p>
 
       <div class="card settings">
         <h2>Einstellungen</h2>
+        <button type="button" class="layout-open" id="layout-open">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg>
+          <span><b>Startseite anpassen</b><small>Widgets und Tabs hinzufügen, entfernen, verschieben</small></span>
+          <span class="mc-open" aria-hidden="true">›</span>
+        </button>
         <div class="row-between theme-row">
           <span class="muted">Darstellung</span>
           <div class="seg" id="theme-seg" role="group" aria-label="Darstellung">
@@ -636,8 +668,23 @@
     <p class="hint left">Bilder werden zur Auswertung an Google Gemini gesendet. Keine Bilder mit vertraulichen Inhalten verwenden.</p>
   </form>
 
-  <script src="avatars.js?v=38"></script>
-  <script src="config.js?v=38"></script>
-  <script src="app.js?v=38"></script>
+  <div id="layout-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2>Startseite anpassen</h2>
+    <p class="muted">Schalte ein, was du brauchst. Die Reihenfolge änderst du auf der Startseite: am Griff ≡ ziehen.</p>
+    <h3 class="prop-head">Widgets auf „Heute“</h3>
+    <div id="layout-widgets"></div>
+    <h3 class="prop-head">Tabs unten</h3>
+    <div id="layout-tabs"></div>
+    <p class="hint left">Heute und Kalender bleiben immer. Ausgeblendete Bereiche behalten ihre Daten.</p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="layout-reset">Standard</button>
+      <button type="button" class="btn primary" id="layout-close">Fertig</button>
+    </div>
+  </div>
+
+  <script src="avatars.js?v=39"></script>
+  <script src="config.js?v=39"></script>
+  <script src="app.js?v=39"></script>
 </body>
 </html>

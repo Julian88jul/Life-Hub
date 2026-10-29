@@ -89,6 +89,7 @@
     token = "";
     store.del("token");
     store.del("avatar"); myAvatar = ""; // die Figur gehört zum Konto
+    store.del("layout"); // die Startseite auch
     if (clearChat) { store.del("chat"); history = []; log.replaceChildren(); }
     $("app").hidden = true;
     $("tabbar").hidden = true;
@@ -129,6 +130,7 @@
   }
 
   function showTab(name, opts = {}) {
+    if (editing && name !== "today") exitEdit();
     const prev = currentView;
     currentView = name;
     const kind = !prev || prev === name || opts.animate === false ? null
@@ -153,6 +155,196 @@
   }
   document.querySelectorAll(".tabbar button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   document.querySelectorAll("[data-goto]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.goto)));
+
+  // ---------- Startseite anpassen: Widgets und Tabs ein- und ausblenden, Widgets verschieben ----------
+  // Die Kennungen müssen zu WIDGETS/OPTIONAL_TABS in web/backend/main.py passen
+  const WIDGETS = [
+    { key: "voice", label: "Sprechen", icon: "🎙️", desc: "Termine per Sprache eintragen" },
+    { key: "weather", label: "Wetter", icon: "🌤️", desc: "Heute und morgen an deinem Ort" },
+    { key: "classes", label: "Stundenplan heute", icon: "🗓️", desc: "Erscheint nur an Tagen mit Veranstaltungen" },
+    { key: "today", label: "Heute", icon: "📌", desc: "Termine und fällige Aufgaben" },
+    { key: "upcoming", label: "Nächste 7 Tage", icon: "📅", desc: "Was als Nächstes ansteht" },
+    { key: "market", label: "Börse", icon: "📈", desc: "Indizes, Stimmung und KI-Briefing" },
+    { key: "recipes", label: "Rezepte", icon: "🍳", desc: "Deine neuesten Rezepte" },
+    { key: "tiles", label: "Schnellzugriff", icon: "🔲", desc: "Aufgaben, Assistent und mehr" },
+  ];
+  const OPTIONAL_TABS = [
+    { key: "plan", label: "Stundenplan", icon: "🗓️" },
+    { key: "todos", label: "Aufgaben", icon: "✅" },
+    { key: "chat", label: "Assistent", icon: "💬" },
+  ];
+
+  // Unbekanntes fällt weg; neue Widgets (aus späteren Versionen) erscheinen am Ende
+  function normLayout(l) {
+    const keys = WIDGETS.map((w) => w.key), tabKeys = OPTIONAL_TABS.map((t) => t.key);
+    const src = l && typeof l === "object" ? l : {};
+    const order = (Array.isArray(src.order) ? src.order : []).filter((k, i, a) => keys.includes(k) && a.indexOf(k) === i);
+    for (const k of keys) if (!order.includes(k)) order.push(k);
+    const pick = (list, allowed) => (Array.isArray(list) ? list : []).filter((k, i, a) => allowed.includes(k) && a.indexOf(k) === i);
+    return { order, hidden: pick(src.hidden, keys), tabs_hidden: pick(src.tabs_hidden, tabKeys) };
+  }
+  let layout = normLayout(store.get("layout", null));
+  let editing = false;
+  const widgetOn = (key) => !layout.hidden.includes(key);
+  const tabOn = (key) => !layout.tabs_hidden.includes(key);
+  const widgetInfo = (key) => WIDGETS.find((w) => w.key === key);
+  const widgetBox = $("widgets");
+  const widgetEls = () => [...widgetBox.children].filter((x) => x.classList.contains("widget"));
+
+  function applyLayout() {
+    for (const key of layout.order) { const w = widgetBox.querySelector(`:scope > [data-widget="${key}"]`); if (w) widgetBox.append(w); }
+    widgetEls().forEach((w) => { w.hidden = !widgetOn(w.dataset.widget); });
+    $("home-empty").hidden = WIDGETS.some((w) => widgetOn(w.key));
+    document.querySelectorAll(".tabbar button").forEach((b) => { b.hidden = OPTIONAL_TABS.some((t) => t.key === b.dataset.tab) && !tabOn(b.dataset.tab); });
+    if (OPTIONAL_TABS.some((t) => t.key === currentView) && !tabOn(currentView)) showTab("today");
+  }
+
+  // Sofort im Browser, kurz danach (gebündelt) auf dem Server, damit Handy und PC gleich aussehen
+  let layoutTimer = null;
+  function saveLayout() {
+    store.set("layout", layout);
+    clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(() => {
+      api("/api/auth/layout", { method: "PUT", body: layout }).catch(() => showToast("Nur auf diesem Gerät gespeichert, der Server war nicht erreichbar."));
+    }, 600);
+  }
+
+  function enterEdit() {
+    if (editing) return;
+    if (currentView !== "today") showTab("today");
+    editing = true;
+    document.body.classList.add("home-editing");
+    $("edit-bar").hidden = false;
+    renderTodayClasses(lastTodayClasses);
+    if (navigator.vibrate) navigator.vibrate(10);
+    requestAnimationFrame(updateNavbar);
+  }
+  function exitEdit() {
+    if (!editing) return;
+    editing = false;
+    document.body.classList.remove("home-editing");
+    $("edit-bar").hidden = true;
+    renderToday(); // Stundenplan-Karte wieder nach Tag ein- oder ausblenden
+  }
+
+  function removeWidget(w) {
+    const key = w.dataset.widget;
+    const done = () => {
+      if (!layout.hidden.includes(key)) layout.hidden.push(key);
+      applyLayout();
+      saveLayout();
+      showToast(`„${widgetInfo(key).label}" entfernt. Mit ＋ oben holst du es zurück.`);
+    };
+    if (reduceMotion() || !w.animate) { done(); return; }
+    const anim = w.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(.86)", opacity: 0 }], { duration: 200, easing: "ease-in", fill: "forwards" });
+    anim.finished.then(() => { done(); anim.cancel(); });
+  }
+
+  // Verschieben am Griff: das Widget folgt dem Finger, die anderen weichen aus; am Rand scrollt die Seite mit
+  function bindGrip(grip, w) {
+    let d = null;
+    const flip = (node, change) => {
+      const before = node.getBoundingClientRect().top;
+      change();
+      const delta = before - node.getBoundingClientRect().top;
+      if (delta && !reduceMotion()) node.animate([{ transform: `translateY(${delta}px)` }, { transform: "none" }], { duration: 220, easing: IOS_EASE });
+    };
+    const move = () => {
+      const want = d.lastY - d.grab;                              // gewünschte Oberkante im Fenster
+      d.dy += want - w.getBoundingClientRect().top;               // Verschiebung gegenüber dem eigentlichen Platz
+      w.style.transform = `translateY(${d.dy}px)`;
+      const sib = widgetEls().filter((x) => !x.hidden), i = sib.indexOf(w);
+      const mid = w.offsetTop + d.dy + w.offsetHeight / 2;        // offsetTop ignoriert Verschiebungen
+      const next = sib[i + 1], prev = sib[i - 1];
+      const swap = (node, change) => { const top = w.offsetTop; flip(node, change); d.dy -= w.offsetTop - top; w.style.transform = `translateY(${d.dy}px)`; };
+      if (next && mid > next.offsetTop + next.offsetHeight / 2) swap(next, () => widgetBox.insertBefore(next, w));
+      else if (prev && mid < prev.offsetTop + prev.offsetHeight / 2) swap(prev, () => widgetBox.insertBefore(w, prev));
+    };
+    const tick = () => {
+      if (!d) return;
+      const bottom = window.innerHeight - 110, top = 110;           // Tab-Leiste bzw. Bearbeiten-Leiste
+      const speed = d.lastY > bottom ? Math.min(14, (d.lastY - bottom) / 3) : d.lastY < top ? -Math.min(14, (top - d.lastY) / 3) : 0;
+      if (speed) { window.scrollBy(0, speed); move(); }
+      d.raf = requestAnimationFrame(tick);
+    };
+    grip.addEventListener("pointerdown", (e) => {
+      if (!editing) return;
+      e.preventDefault();
+      try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+      d = { grab: e.clientY - w.getBoundingClientRect().top, lastY: e.clientY, dy: 0, raf: 0 };
+      w.classList.add("w-dragging");
+      if (navigator.vibrate) navigator.vibrate(8);
+      d.raf = requestAnimationFrame(tick);
+    });
+    grip.addEventListener("pointermove", (e) => { if (d) { d.lastY = e.clientY; move(); } });
+    const end = () => {
+      if (!d) return;
+      cancelAnimationFrame(d.raf);
+      d = null;
+      w.style.transition = `transform .25s ${IOS_EASE}`;
+      w.style.transform = "";
+      setTimeout(() => { w.style.transition = ""; w.classList.remove("w-dragging"); }, 260);
+      layout.order = widgetEls().map((x) => x.dataset.widget);
+      saveLayout();
+    };
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  }
+
+  widgetEls().forEach((w) => {
+    const info = widgetInfo(w.dataset.widget);
+    const rm = el("button", { type: "button", className: "w-remove", ariaLabel: `${info.label} entfernen`, textContent: "−" });
+    rm.addEventListener("click", (e) => { e.stopPropagation(); removeWidget(w); });
+    const grip = el("button", { type: "button", className: "w-grip", ariaLabel: `${info.label} verschieben` });
+    grip.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8.5h14M5 12h14M5 15.5h14"/></svg>';
+    bindGrip(grip, w);
+    w.append(rm, grip);
+    // Gedrückt halten auf einem Widget startet das Anpassen (wie auf dem iPhone-Home-Bildschirm)
+    longPress(w, enterEdit, ".w-remove, .w-grip, input, textarea, .seg, .weather");
+  });
+  // Im Anpassen-Modus öffnen Widgets nichts (Antippen von Börse, Rezepten, Kacheln usw. ist gesperrt)
+  widgetBox.addEventListener("click", (e) => {
+    if (!editing || e.target.closest(".w-remove, .w-grip")) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+
+  // Auswahl: alle Widgets und Tabs mit Schalter
+  function switchRow(title, sub, on, change) {
+    const input = el("input", { type: "checkbox", checked: on });
+    input.addEventListener("change", () => change(input.checked));
+    const text = el("span", { className: "sr-text" }, el("b", { textContent: title }));
+    if (sub) text.append(el("small", { textContent: sub }));
+    return el("label", { className: "switch-row" }, input, text);
+  }
+  function renderLayoutSheet() {
+    $("layout-widgets").replaceChildren(...layout.order.map(widgetInfo).map((w) => switchRow(`${w.icon} ${w.label}`, w.desc, widgetOn(w.key), (on) => {
+      layout.hidden = on ? layout.hidden.filter((k) => k !== w.key) : [...layout.hidden, w.key];
+      applyLayout();
+      saveLayout();
+      if (on) renderToday(); // ausgeblendete Widgets hatten nichts geladen
+    })));
+    $("layout-tabs").replaceChildren(...OPTIONAL_TABS.map((t) => switchRow(`${t.icon} ${t.label}`, "", tabOn(t.key), (on) => {
+      layout.tabs_hidden = on ? layout.tabs_hidden.filter((k) => k !== t.key) : [...layout.tabs_hidden, t.key];
+      applyLayout();
+      saveLayout();
+    })));
+  }
+  function openLayoutSheet() {
+    renderLayoutSheet();
+    $("sheet-backdrop").hidden = false;
+    $("layout-sheet").hidden = false;
+    $("layout-sheet").scrollTop = 0;
+  }
+  $("edit-add").addEventListener("click", openLayoutSheet);
+  $("edit-done").addEventListener("click", exitEdit);
+  $("layout-close").addEventListener("click", closeSheet);
+  $("layout-reset").addEventListener("click", () => { layout = normLayout(null); applyLayout(); saveLayout(); renderLayoutSheet(); renderToday(); });
+  $("layout-open").addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: reduceMotion() ? "auto" : "smooth" });
+    enterEdit();
+    showToast("Am Griff ≡ ziehen zum Verschieben, − entfernt, ＋ fügt hinzu.");
+  });
 
   // ---------- Terminlisten ----------
   const covers = (ev, key) => ev.start_date <= key && ev.end_date >= key;
@@ -353,8 +545,10 @@
     $("today-greeting").textContent = h < 11 ? "Guten Morgen" : h < 18 ? "Hallo" : "Guten Abend";
     $("today-date").textContent = longDate(todayKey);
     $("whoami").textContent = store.get("user", "") ? `Angemeldet als ${store.get("user", "")}` : "";
-    renderWeather();
-    loadMarket(); loadBriefing(); loadRecipes();
+    // Ausgeblendete Widgets laden nichts (spart vor allem das tägliche KI-Briefing der Börse)
+    if (widgetOn("weather")) renderWeather();
+    if (widgetOn("market")) { loadMarket(); loadBriefing(); }
+    if (widgetOn("recipes")) loadRecipes();
     try {
       const [evs, todos, classes] = await Promise.all([api(`/api/events?from=${todayKey}&to=${weekKey}`), api("/api/todos"), api("/api/timetable")]);
       renderTodayClasses(classes);
@@ -836,10 +1030,13 @@
     $("sheet").hidden = false;
     setTimeout(() => $("f-title").focus(), 50);
   }
-  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet", "recipe-sheet", "rimport-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
+  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet", "recipe-sheet", "rimport-sheet", "layout-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
   $("f-cancel").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", closeSheet);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if ($("sheet-backdrop").hidden && editing) exitEdit(); else closeSheet();
+  });
 
   // Fenster am grauen Strich nach unten ziehen = abbrechen (wie bei normalen Handy-Apps)
   document.querySelectorAll(".sheet").forEach((sheet) => {
@@ -1310,10 +1507,14 @@
     renderPlan();
   }));
 
+  let lastTodayClasses = [];
   function renderTodayClasses(classes) {
+    lastTodayClasses = classes;
     const today = classes.filter((c) => c.weekday === weekdayOf(new Date()));
-    $("today-classes-card").hidden = today.length === 0;
+    // An freien Tagen ausgeblendet; beim Anpassen der Startseite sichtbar, damit man sie verschieben oder entfernen kann
+    $("today-classes-card").hidden = today.length === 0 && !editing;
     $("today-classes").replaceChildren(...withGaps(today).map((c) => (c.gap ? gapCard(c.from, c.to, { now: gapIsNow(c) }) : classCard(c, { now: isNow(c) }))));
+    if (!today.length) $("today-classes").append(el("li", { className: "empty", textContent: "Heute keine Veranstaltungen." }));
   }
 
   // Eintrag anlegen/ändern
@@ -2847,12 +3048,15 @@
   }
 
   // Wischen zwischen Tabs: nach links = nächster Tab, nach rechts = vorheriger (die Seite folgt dem Finger)
-  function tabSwipe(view, { prev = null, next = null, exclude = "" }) {
-    let t = null;
+  // prev/next dürfen Funktionen sein (ausgeblendete Tabs werden übersprungen)
+  function tabSwipe(view, { prev: prevOf = null, next: nextOf = null, exclude = "" }) {
+    let t = null, prev = null, next = null;
     const skip = ".seg, input, textarea, button.voice-hero" + (exclude ? `, ${exclude}` : "");
     view.addEventListener("touchstart", (e) => {
-      if (!$("sheet-backdrop").hidden || e.target.closest(skip)) return;
+      if (!$("sheet-backdrop").hidden || editing || e.target.closest(skip)) return;
       if (isStandalone() && e.touches[0].clientX <= 24) return; // Rand gehört dem Zurückwischen
+      prev = typeof prevOf === "function" ? prevOf() : prevOf;
+      next = typeof nextOf === "function" ? nextOf() : nextOf;
       t = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: e.timeStamp, dx: 0, active: false };
     }, { passive: true });
     view.addEventListener("touchmove", (e) => {
@@ -2888,11 +3092,11 @@
   }
   tabSwipe($("view-today"), { next: "calendar", exclude: ".weather" });
   // Im Kalender: auf dem Raster wechselt der Monat, darüber und darunter der Tab
-  tabSwipe($("view-calendar"), { prev: "today", next: "plan", exclude: "#cal-grid, .cal-weekdays, .friend-bubbles" });
+  tabSwipe($("view-calendar"), { prev: "today", next: () => OPTIONAL_TABS.map((x) => x.key).find(tabOn) || null, exclude: "#cal-grid, .cal-weekdays, .friend-bubbles" });
 
   // Nach unten ziehen zum Aktualisieren (Heute, Kalender, Börse, Rezepte)
   const PULL_REFRESH = {
-    today: () => Promise.all([renderToday(), loadMarket(true), loadRecipes(true)]),
+    today: () => Promise.all([renderToday(), widgetOn("market") && loadMarket(true), widgetOn("recipes") && loadRecipes(true)]),
     calendar: () => loadMonth(),
     market: () => Promise.all([loadMarket(true), loadBriefing()]),
     recipes: () => loadRecipes(true),
@@ -2910,7 +3114,7 @@
     };
     const hide = () => { ptr.classList.remove("ready", "spinning"); ptr.style.transition = `transform .3s ${IOS_EASE}, opacity .3s`; show(0); setTimeout(() => { ptr.style.transition = ""; }, 320); };
     document.addEventListener("touchstart", (e) => {
-      if (busy || window.scrollY > 0 || !PULL_REFRESH[currentView] || !$("sheet-backdrop").hidden || $("app").hidden) return;
+      if (busy || editing || window.scrollY > 0 || !PULL_REFRESH[currentView] || !$("sheet-backdrop").hidden || $("app").hidden) return;
       if (!e.target.closest("#cal-grid")) rangeGesture = false; // alte Mehrtages-Auswahl zählt hier nicht
       p = { y: e.touches[0].clientY, x: e.touches[0].clientX, pull: 0, active: false };
     }, { passive: true });
@@ -2987,7 +3191,10 @@
     $("tabbar").hidden = false;
     renderHistory();
     Object.assign(rs, { items: [], loadedAt: 0, error: "", open: null, openId: null }); // gehören zum Konto
-    showTab(store.get("tab", "today"), { animate: false });
+    layout = normLayout(store.get("layout", null));
+    applyLayout();
+    const startTab = store.get("tab", "today");
+    showTab(OPTIONAL_TABS.some((t) => t.key === startTab) && !tabOn(startTab) ? "today" : startTab, { animate: false });
     loadFriends();
     takeSharedText();
     checkHealth();
@@ -2995,6 +3202,12 @@
       const me = await api("/api/auth/me");
       store.set("user", me.username);
       myAvatar = me.avatar || ""; store.set("avatar", myAvatar); renderAvatarPick();
+      if (me.layout) { // Startseite vom Konto (gleich auf allen Geräten)
+        layout = normLayout(me.layout);
+        store.set("layout", layout);
+        applyLayout();
+        if (currentView === "today") renderToday();
+      }
     } catch (e) {
       if (!token) { $("a-error").textContent = e.message; $("a-error").hidden = false; } // 401: api() hat bereits abgemeldet
     }

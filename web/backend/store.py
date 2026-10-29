@@ -87,10 +87,14 @@ class SqliteStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
-                    avatar TEXT NOT NULL DEFAULT '')"""
+                    avatar TEXT NOT NULL DEFAULT '',
+                    layout TEXT NOT NULL DEFAULT '')"""
             )
-            if "avatar" not in {r["name"] for r in c.execute("PRAGMA table_info(users)")}:
+            user_cols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
+            if "avatar" not in user_cols:
                 c.execute("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+            if "layout" not in user_cols:  # Startseite: Reihenfolge und ausgeblendete Widgets/Tabs (JSON)
+                c.execute("ALTER TABLE users ADD COLUMN layout TEXT NOT NULL DEFAULT ''")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,7 +216,7 @@ class SqliteStore:
 
     def get_user_by_id(self, user_id):
         with self._db() as c:
-            row = c.execute("SELECT id,username,password_hash,avatar FROM users WHERE id=?", (user_id,)).fetchone()
+            row = c.execute("SELECT id,username,password_hash,avatar,layout FROM users WHERE id=?", (user_id,)).fetchone()
         return dict(row) if row else None
 
     def set_password(self, user_id, password_hash):
@@ -222,6 +226,10 @@ class SqliteStore:
     def set_avatar(self, user_id, avatar):
         with self._db() as c:
             c.execute("UPDATE users SET avatar=? WHERE id=?", (avatar, user_id))
+
+    def set_layout(self, user_id, layout):
+        with self._db() as c:
+            c.execute("UPDATE users SET layout=? WHERE id=?", (layout, user_id))
 
     # --- Termine ---
     def list_events(self, user_id, date_from, date_to):
@@ -520,7 +528,7 @@ class SupabaseStore:
         return rows[0] if rows else None
 
     def get_user_by_id(self, user_id):
-        rows = self._get("users", {"id": f"eq.{user_id}", "select": "id,username,password_hash,avatar"})
+        rows = self._get("users", {"id": f"eq.{user_id}", "select": "id,username,password_hash,avatar,layout"})
         return rows[0] if rows else None
 
     def set_password(self, user_id, password_hash):
@@ -529,6 +537,10 @@ class SupabaseStore:
 
     def set_avatar(self, user_id, avatar):
         r = self.http.patch("/users", params={"id": f"eq.{user_id}"}, json={"avatar": avatar})
+        r.raise_for_status()
+
+    def set_layout(self, user_id, layout):
+        r = self.http.patch("/users", params={"id": f"eq.{user_id}"}, json={"layout": layout})
         r.raise_for_status()
 
     # --- Termine ---
@@ -765,6 +777,7 @@ get_user = _impl.get_user
 get_user_by_id = _impl.get_user_by_id
 set_password = _impl.set_password
 set_avatar = _impl.set_avatar
+set_layout = _impl.set_layout
 list_events = _impl.list_events
 create_event = _impl.create_event
 update_event = _impl.update_event

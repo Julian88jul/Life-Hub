@@ -135,7 +135,53 @@ def me(uid: int = Depends(current_user)):
     user = store.get_user_by_id(uid)
     if not user:
         raise HTTPException(401, "Dieses Konto gibt es nicht mehr. Bitte neu registrieren oder anmelden.")
-    return {"username": user["username"], "avatar": user.get("avatar") or ""}
+    return {"username": user["username"], "avatar": user.get("avatar") or "", "layout": _parse_layout(user.get("layout"))}
+
+
+# Startseite anpassen: Reihenfolge und Sichtbarkeit der Widgets, ausgeblendete Tabs. Muss zu web/frontend/app.js passen.
+WIDGETS = ("voice", "weather", "classes", "today", "upcoming", "market", "recipes", "tiles")
+OPTIONAL_TABS = ("plan", "todos", "chat")  # Heute und Kalender bleiben immer
+
+
+def _known(items, allowed) -> list[str]:
+    """Nur bekannte Kennungen, jede einmal (Unbekanntes von neueren Versionen fällt still heraus)."""
+    out = []
+    for x in items or []:
+        if x in allowed and x not in out:
+            out.append(x)
+    return out
+
+
+def _parse_layout(raw: str | None) -> dict | None:
+    try:
+        data = json.loads(raw) if raw else None
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {"order": _known(data.get("order"), WIDGETS), "hidden": _known(data.get("hidden"), WIDGETS),
+            "tabs_hidden": _known(data.get("tabs_hidden"), OPTIONAL_TABS)}
+
+
+class LayoutIn(BaseModel):
+    order: list[str] = Field(default_factory=list, max_length=30)
+    hidden: list[str] = Field(default_factory=list, max_length=30)
+    tabs_hidden: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def check(self):
+        if any(len(x) > 20 for x in self.order + self.hidden + self.tabs_hidden):
+            raise ValueError("Ungültige Kennung.")
+        self.order, self.hidden = _known(self.order, WIDGETS), _known(self.hidden, WIDGETS)
+        self.tabs_hidden = _known(self.tabs_hidden, OPTIONAL_TABS)
+        return self
+
+
+@app.put("/api/auth/layout")
+def put_layout(body: LayoutIn, uid: int = Depends(current_user)):
+    layout = body.model_dump()
+    store.set_layout(uid, json.dumps(layout))
+    return layout
 
 
 # Figuren (Pixel-Avatare); gespeichert wird nur die Kennung. Muss zu web/frontend/avatars.js passen.

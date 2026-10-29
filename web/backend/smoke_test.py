@@ -48,8 +48,21 @@ with TestClient(main.app) as c:
     other = c.post("/api/auth/register", json={**body, "username": "bert"}).json()["token"]
     HO = auth(other)
 
-    check("Sitzung prüfen (me)", c.get("/api/auth/me", headers=H).json() == {"username": "anna", "avatar": ""})
+    check("Sitzung prüfen (me)", c.get("/api/auth/me", headers=H).json() == {"username": "anna", "avatar": "", "layout": None})
     check("me ohne Login gesperrt", c.get("/api/auth/me").status_code == 401)
+
+    print("Startseite anpassen")
+    lay = {"order": ["recipes", "weather", "voice", "recipes", "kaputt"], "hidden": ["market", "classes"], "tabs_hidden": ["plan", "calendar"]}
+    r = c.put("/api/auth/layout", json=lay, headers=H)
+    check("Layout speichern (Unbekanntes und Doppeltes fällt weg)", r.status_code == 200 and r.json() == {
+        "order": ["recipes", "weather", "voice"], "hidden": ["market", "classes"], "tabs_hidden": ["plan"]}, r.text)
+    check("Layout kommt mit me zurück", c.get("/api/auth/me", headers=H).json()["layout"]["hidden"] == ["market", "classes"])
+    check("Kalender lässt sich nicht ausblenden", c.get("/api/auth/me", headers=H).json()["layout"]["tabs_hidden"] == ["plan"])
+    check("Anderes Konto behält Standard", c.get("/api/auth/me", headers=HO).json()["layout"] is None)
+    check("Zu viele Einträge abgelehnt", c.put("/api/auth/layout", json={"order": ["voice"] * 31}, headers=H).status_code == 422)
+    check("Zu lange Kennung abgelehnt", c.put("/api/auth/layout", json={"hidden": ["x" * 21]}, headers=H).status_code == 422)
+    check("Layout ohne Login gesperrt", c.put("/api/auth/layout", json=lay).status_code == 401)
+    check("Zurücksetzen auf Standard", c.put("/api/auth/layout", json={}, headers=H).json() == {"order": [], "hidden": [], "tabs_hidden": []})
 
     print("Termine")
     ev = {"title": "Klausur", "start_date": "2026-10-20", "end_date": "2026-10-22", "color": "#ef4444", "icon": "🎓"}

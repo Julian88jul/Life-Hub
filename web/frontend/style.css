@@ -1259,3 +1259,43 @@ body.nav-compact .top h1, body.nav-compact .detail-title h1 { opacity: .25; }
 @media (prefers-reduced-motion: reduce) {
   .recipe-home, .recipe-tile, .rc-item .rpic, .rd-ingredients li, .rd-tick, .rd-txt { transition: none; }
 }
+
+/* ---------- Startseite anpassen (wie der iPhone-Home-Bildschirm) ---------- */
+.widget { position: relative; }
+.w-remove, .w-grip { display: none; }
+.layout-open {
+  display: flex; align-items: center; gap: 12px; width: 100%; margin: 4px 0 6px; padding: 12px; text-align: left;
+  border-radius: 14px; background: var(--field); border: 1px solid var(--line); color: var(--text);
+}
+.layout-open svg { width: 24px; height: 24px; flex: none; fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.layout-open > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; }
+.layout-open small { color: var(--muted); font-size: 13px; }
+.sr-text { display: flex; flex-direction: column; }
+.sr-text small { color: var(--muted); font-size: 13px; }
+.edit-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 16; height: calc(env(safe-area-inset-top) + 54px);
+  padding: env(safe-area-inset-top) 14px 0; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent); border-bottom: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(22px) saturate(170%); backdrop-filter: blur(22px) saturate(170%);
+}
+.edit-title { font-size: 17px; font-weight: 600; }
+.edit-done { font-weight: 700; color: var(--accent); }
+body.home-editing #app { padding-top: calc(env(safe-area-inset-top) + 66px); }
+body.home-editing .navbar { display: none; }
+body.home-editing .widget { -webkit-user-select: none; user-select: none; animation: wiggle .3s ease-in-out infinite alternate; }
+body.home-editing .widget:nth-child(2n) { animation-delay: -.15s; }
+@keyframes wiggle { from { transform: rotate(-.3deg); } to { transform: rotate(.3deg); } }
+body.home-editing .w-remove {
+  display: grid; place-items: center; position: absolute; top: -8px; left: -8px; z-index: 3; width: 28px; height: 28px; padding: 0;
+  border-radius: 50%; border: 2px solid var(--bg); background: #ff3b30; color: #fff; font-size: 20px; font-weight: 700; line-height: 1;
+}
+body.home-editing .w-grip {
+  display: grid; place-items: center; position: absolute; top: 8px; right: 8px; z-index: 3; width: 40px; height: 40px; padding: 0;
+  border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface-solid); color: var(--text);
+  touch-action: none; cursor: grab; box-shadow: var(--shadow-sm);
+}
+.w-grip svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.widget.w-dragging { animation: none !important; z-index: 6; }
+.widget.w-dragging > :not(.w-remove):not(.w-grip) { box-shadow: var(--shadow); }
+.widget.w-dragging .w-grip { cursor: grabbing; }
+@media (prefers-reduced-motion: reduce) { body.home-editing .widget { animation: none; } }
