@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=39">
+  <link rel="stylesheet" href="style.css?v=40">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -107,6 +107,20 @@
       <div class="card">
         <h2>Nächste 7 Tage</h2>
         <ul class="event-list" id="upcoming-events"></ul>
+      </div>
+      </div>
+      <div class="widget" data-widget="shopping">
+      <div class="card shop-card">
+        <div class="row-between">
+          <h2>Einkaufsliste</h2>
+          <button type="button" class="text-btn" id="shop-clear" hidden>Erledigte löschen</button>
+        </div>
+        <form class="inline-form shop-add" id="shop-form" autocomplete="off">
+          <input id="shop-input" type="text" placeholder="z. B. Milch" aria-label="Zur Einkaufsliste hinzufügen" maxlength="200" enterkeyhint="done">
+          <button type="submit" class="btn primary small" aria-label="Hinzufügen">＋</button>
+        </form>
+        <ul class="event-list shop-list" id="shop-list"></ul>
+        <p class="muted shop-empty" id="shop-empty">Noch leer. Trag etwas ein oder hol dir Zutaten aus einem Rezept.</p>
       </div>
       </div>
       <div class="widget" data-widget="market">
@@ -401,14 +415,24 @@
         <button type="button" class="icon-btn" id="recipe-back" aria-label="Zurück zu den Rezepten">‹</button>
         <div class="detail-title"><h1 id="rd-name"></h1></div>
         <div class="top-actions">
+          <button type="button" class="icon-btn" id="rd-share" aria-label="Rezept teilen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5V3.5M8 7.5l4-4 4 4"/><path d="M7.5 11H6a2 2 0 0 0-2 2v6.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V13a2 2 0 0 0-2-2h-1.5"/></svg></button>
           <button type="button" class="icon-btn" id="rd-edit" aria-label="Rezept bearbeiten">✏️</button>
           <button type="button" class="icon-btn" id="rd-delete" aria-label="Rezept löschen">🗑</button>
         </div>
       </header>
       <div class="rd-hero" id="rd-hero"></div>
       <div class="rd-meta" id="rd-meta"></div>
-      <h2 class="section-head" id="rd-ing-head">Zutaten</h2>
+      <div class="rd-ing-head" id="rd-ing-head">
+        <h2 class="section-head">Zutaten</h2>
+        <div class="stepper" id="rd-servings" role="group" aria-label="Portionen umrechnen" hidden>
+          <button type="button" id="rd-minus" aria-label="Weniger Portionen">−</button>
+          <span id="rd-serv-label" aria-live="polite"></span>
+          <button type="button" id="rd-plus" aria-label="Mehr Portionen">＋</button>
+        </div>
+      </div>
+      <p class="rd-scaled" id="rd-scaled" hidden><span id="rd-scaled-text"></span> <button type="button" class="text-btn" id="rd-scaled-reset">Zurücksetzen</button></p>
       <ul class="card rd-ingredients" id="rd-ingredients"></ul>
+      <button type="button" class="btn ghost rd-shop" id="rd-shop">🛒 Zur Einkaufsliste</button>
       <h2 class="section-head" id="rd-steps-head">Zubereitung</h2>
       <ol class="rd-steps" id="rd-steps"></ol>
       <div class="card rd-note" id="rd-note" hidden>
@@ -668,6 +692,33 @@
     <p class="hint left">Bilder werden zur Auswertung an Google Gemini gesendet. Keine Bilder mit vertraulichen Inhalten verwenden.</p>
   </form>
 
+  <div id="rshare-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2>Rezept teilen</h2>
+    <p class="muted" id="rs-lead"></p>
+    <h3 class="prop-head" id="rs-friends-head">An Freunde in Life Hub</h3>
+    <ul class="friend-list rs-friends" id="rs-friends"></ul>
+    <p class="hint left" id="rs-no-friends" hidden>Noch keine Freunde. Über das Personen-Symbol oben auf „Heute“ fügst du welche hinzu.</p>
+    <button type="button" class="btn ghost rs-text" id="rs-text">Als Text teilen (WhatsApp, Mail …)</button>
+    <p class="error" id="rs-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="rs-close">Schließen</button>
+    </div>
+  </div>
+
+  <div id="shop-pick-sheet" class="sheet" hidden>
+    <div class="grabber"></div>
+    <h2>Zur Einkaufsliste</h2>
+    <p class="muted" id="sp-lead"></p>
+    <ul class="prop-list sp-list" id="sp-list"></ul>
+    <p class="hint left">Was du abwählst (z. B. Mehl oder Salz), bleibt beim nächsten Rezept abgewählt.</p>
+    <p class="error" id="sp-error" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="sp-cancel">Abbrechen</button>
+      <button type="button" class="btn primary" id="sp-add">Hinzufügen</button>
+    </div>
+  </div>
+
   <div id="layout-sheet" class="sheet" hidden>
     <div class="grabber"></div>
     <h2>Startseite anpassen</h2>
@@ -683,8 +734,8 @@
     </div>
   </div>
 
-  <script src="avatars.js?v=39"></script>
-  <script src="config.js?v=39"></script>
-  <script src="app.js?v=39"></script>
+  <script src="avatars.js?v=40"></script>
+  <script src="config.js?v=40"></script>
+  <script src="app.js?v=40"></script>
 </body>
 </html>

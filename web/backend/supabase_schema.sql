@@ -147,3 +147,18 @@ grant all on all sequences in schema public to service_role;
 -- ---------- Startseite anpassen (Update: bei bestehendem Projekt ausführen) ----------
 -- Reihenfolge und ausgeblendete Widgets/Tabs als JSON, leer = Standard
 alter table users add column if not exists layout text not null default '';
+
+-- ---------- Rezepte teilen und Einkaufsliste (Update: bei bestehendem Projekt ausführen) ----------
+alter table recipes add column if not exists from_name text not null default '';
+create table if not exists shopping_items (
+  id bigint generated always as identity primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  title text not null,
+  note text not null default '',
+  done boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_shopping_user on shopping_items(user_id);
+alter table shopping_items enable row level security;
+grant all on shopping_items to service_role;
+grant all on all sequences in schema public to service_role;

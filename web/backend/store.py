@@ -17,7 +17,8 @@ LIST_PATCH_FIELDS = ("name", "emoji", "color")
 CLASS_FIELDS = ("title", "weekday", "start_time", "end_time", "room", "color", "icon")
 SHARE_FIELDS = ("calendar", "timetable", "todos")
 RECIPE_FIELDS = ("name", "category", "minutes", "servings", "ingredients", "steps", "note")
-RECIPE_LIST_FIELDS = "id,name,category,minutes,servings,ingredients,thumb"  # ohne großes Foto
+RECIPE_LIST_FIELDS = "id,name,category,minutes,servings,ingredients,thumb,from_name"  # ohne großes Foto
+SHOP_PATCH_FIELDS = ("done", "title")
 
 
 def _recipe(row) -> dict:
@@ -196,9 +197,21 @@ class SqliteStore:
                     steps TEXT NOT NULL DEFAULT '[]',
                     note TEXT NOT NULL DEFAULT '',
                     photo TEXT NOT NULL DEFAULT '',
-                    thumb TEXT NOT NULL DEFAULT '')"""
+                    thumb TEXT NOT NULL DEFAULT '',
+                    from_name TEXT NOT NULL DEFAULT '')"""
             )
+            if "from_name" not in {r["name"] for r in c.execute("PRAGMA table_info(recipes)")}:
+                c.execute("ALTER TABLE recipes ADD COLUMN from_name TEXT NOT NULL DEFAULT ''")  # von einem Freund geteilt
             c.execute("CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS shopping_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    done INTEGER NOT NULL DEFAULT 0)"""
+            )
+            c.execute("CREATE INDEX IF NOT EXISTS idx_shopping_user ON shopping_items(user_id)")
 
     # --- Nutzer ---
     def create_user(self, username, password_hash):
@@ -382,8 +395,8 @@ class SqliteStore:
     def create_recipe(self, user_id, r):
         with self._db() as c:
             cur = c.execute(
-                "INSERT INTO recipes(user_id,name,category,minutes,servings,ingredients,steps,note,photo,thumb) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (user_id, *self._recipe_values(r), r.get("photo") or "", r.get("thumb") or ""),
+                "INSERT INTO recipes(user_id,name,category,minutes,servings,ingredients,steps,note,photo,thumb,from_name) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (user_id, *self._recipe_values(r), r.get("photo") or "", r.get("thumb") or "", r.get("from_name") or ""),
             )
             new_id = cur.lastrowid
         return self.get_recipe(user_id, new_id)
@@ -403,6 +416,38 @@ class SqliteStore:
     def delete_recipe(self, user_id, recipe_id):
         with self._db() as c:
             return c.execute("DELETE FROM recipes WHERE id=? AND user_id=?", (recipe_id, user_id)).rowcount > 0
+
+    # --- Einkaufsliste ---
+    def list_shopping(self, user_id):
+        with self._db() as c:
+            rows = c.execute("SELECT id,title,note,done FROM shopping_items WHERE user_id=? ORDER BY done, id", (user_id,)).fetchall()
+        return [_todo(r) for r in rows]
+
+    def add_shopping(self, user_id, items):
+        with self._db() as c:
+            ids = [c.execute("INSERT INTO shopping_items(user_id,title,note) VALUES (?,?,?)", (user_id, it["title"], it["note"])).lastrowid
+                   for it in items]
+            rows = c.execute(f"SELECT id,title,note,done FROM shopping_items WHERE id IN ({','.join('?' * len(ids))}) ORDER BY id", ids).fetchall() if ids else []
+        return [_todo(r) for r in rows]
+
+    def update_shopping(self, user_id, item_id, changes):
+        changes = {k: v for k, v in changes.items() if k in SHOP_PATCH_FIELDS}
+        with self._db() as c:
+            if changes:
+                cur = c.execute(f"UPDATE shopping_items SET {','.join(f'{k}=?' for k in changes)} WHERE id=? AND user_id=?",
+                                (*[int(v) if k == "done" else v for k, v in changes.items()], item_id, user_id))
+                if cur.rowcount == 0:
+                    return None
+            row = c.execute("SELECT id,title,note,done FROM shopping_items WHERE id=? AND user_id=?", (item_id, user_id)).fetchone()
+        return _todo(row) if row else None
+
+    def delete_shopping(self, user_id, item_id):
+        with self._db() as c:
+            return c.execute("DELETE FROM shopping_items WHERE id=? AND user_id=?", (item_id, user_id)).rowcount > 0
+
+    def clear_shopping_done(self, user_id):
+        with self._db() as c:
+            return c.execute("DELETE FROM shopping_items WHERE user_id=? AND done=1", (user_id,)).rowcount
 
     # --- Börse ---
     def list_watchlist(self, user_id):
@@ -657,7 +702,8 @@ class SupabaseStore:
         return rows[0] if rows else None
 
     def create_recipe(self, user_id, r):
-        body = {"user_id": user_id, **{f: r[f] for f in RECIPE_FIELDS}, "photo": r.get("photo") or "", "thumb": r.get("thumb") or ""}
+        body = {"user_id": user_id, **{f: r[f] for f in RECIPE_FIELDS}, "photo": r.get("photo") or "", "thumb": r.get("thumb") or "",
+                "from_name": r.get("from_name") or ""}
         resp = self.http.post("/recipes", json=body, headers=self.REP)
         resp.raise_for_status()
         return resp.json()[0]
@@ -675,6 +721,41 @@ class SupabaseStore:
         r = self.http.delete("/recipes", params={"id": f"eq.{recipe_id}", "user_id": f"eq.{user_id}"}, headers=self.REP)
         r.raise_for_status()
         return bool(r.json())
+
+    # --- Einkaufsliste ---
+    SHOP_SELECT = "id,title,note,done"
+
+    def list_shopping(self, user_id):
+        return self._get("shopping_items", {"user_id": f"eq.{user_id}", "select": self.SHOP_SELECT, "order": "done.asc,id.asc"})
+
+    def add_shopping(self, user_id, items):
+        if not items:
+            return []
+        r = self.http.post("/shopping_items", params={"select": self.SHOP_SELECT},
+                           json=[{"user_id": user_id, "title": it["title"], "note": it["note"]} for it in items], headers=self.REP)
+        r.raise_for_status()
+        return sorted(r.json(), key=lambda x: x["id"])
+
+    def update_shopping(self, user_id, item_id, changes):
+        changes = {k: v for k, v in changes.items() if k in SHOP_PATCH_FIELDS}
+        params = {"id": f"eq.{item_id}", "user_id": f"eq.{user_id}", "select": self.SHOP_SELECT}
+        if not changes:
+            rows = self._get("shopping_items", params)
+            return rows[0] if rows else None
+        r = self.http.patch("/shopping_items", params=params, json=changes, headers=self.REP)
+        r.raise_for_status()
+        rows = r.json()
+        return rows[0] if rows else None
+
+    def delete_shopping(self, user_id, item_id):
+        r = self.http.delete("/shopping_items", params={"id": f"eq.{item_id}", "user_id": f"eq.{user_id}"}, headers=self.REP)
+        r.raise_for_status()
+        return bool(r.json())
+
+    def clear_shopping_done(self, user_id):
+        r = self.http.delete("/shopping_items", params={"user_id": f"eq.{user_id}", "done": "eq.true"}, headers=self.REP)
+        r.raise_for_status()
+        return len(r.json())
 
     def clear_done(self, user_id, list_id):
         r = self.http.delete("/todos", params={"list_id": f"eq.{list_id}", "user_id": f"eq.{user_id}", "done": "eq.true"}, headers=self.REP)
@@ -801,6 +882,11 @@ get_recipe = _impl.get_recipe
 create_recipe = _impl.create_recipe
 update_recipe = _impl.update_recipe
 delete_recipe = _impl.delete_recipe
+list_shopping = _impl.list_shopping
+add_shopping = _impl.add_shopping
+update_shopping = _impl.update_shopping
+delete_shopping = _impl.delete_shopping
+clear_shopping_done = _impl.clear_shopping_done
 get_friendship = _impl.get_friendship
 create_friendship = _impl.create_friendship
 accept_friendship = _impl.accept_friendship

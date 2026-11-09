@@ -139,7 +139,7 @@ def me(uid: int = Depends(current_user)):
 
 
 # Startseite anpassen: Reihenfolge und Sichtbarkeit der Widgets, ausgeblendete Tabs. Muss zu web/frontend/app.js passen.
-WIDGETS = ("voice", "weather", "classes", "today", "upcoming", "market", "recipes", "tiles")
+WIDGETS = ("voice", "weather", "classes", "today", "upcoming", "shopping", "market", "recipes", "tiles")
 OPTIONAL_TABS = ("plan", "todos", "chat")  # Heute und Kalender bleiben immer
 
 
@@ -725,6 +725,93 @@ def put_recipe(recipe_id: int, body: RecipeIn, uid: int = Depends(current_user))
 def remove_recipe(recipe_id: int, uid: int = Depends(current_user)):
     if not store.delete_recipe(uid, recipe_id):
         raise HTTPException(404, "Rezept nicht gefunden")
+    return {"ok": True}
+
+
+SEND_LIMIT, SEND_WINDOW = 30, 3600
+_send_calls: dict[int, list[float]] = {}
+
+
+class RecipeSendIn(BaseModel):
+    friend_id: int
+
+
+@app.post("/api/recipes/{recipe_id}/send", status_code=201)
+def send_recipe(recipe_id: int, body: RecipeSendIn, uid: int = Depends(current_user)):
+    """Schickt einem Freund eine eigene Kopie (mit Foto); sie gehört danach ihm und trägt den Absender."""
+    if not _is_friend(uid, body.friend_id):
+        raise HTTPException(404, "Diese Person ist nicht in deiner Freundesliste.")
+    recipe = store.get_recipe(uid, recipe_id)
+    if not recipe:
+        raise HTTPException(404, "Rezept nicht gefunden")
+    now = time.time()
+    recent = [t for t in _send_calls.get(uid, []) if now - t < SEND_WINDOW]
+    if len(recent) >= SEND_LIMIT:
+        raise HTTPException(429, "Du hast gerade sehr viele Rezepte verschickt. Bitte später nochmal.")
+    _send_calls[uid] = recent + [now]
+    me_user = store.get_user_by_id(uid)
+    copy = {k: recipe.get(k) for k in ("name", "category", "minutes", "servings", "ingredients", "steps", "note", "photo", "thumb")}
+    copy["from_name"] = me_user["username"] if me_user else ""
+    store.create_recipe(body.friend_id, copy)
+    return {"ok": True}
+
+
+# ---------- Einkaufsliste ----------
+class ShopItemIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    note: str = Field(default="", max_length=120)  # z. B. aus welchem Rezept
+
+    @model_validator(mode="after")
+    def check(self):
+        self.title, self.note = self.title.strip(), self.note.strip()
+        if not self.title:
+            raise ValueError("Bitte etwas eintragen.")
+        return self
+
+
+class ShopAddIn(BaseModel):
+    items: list[ShopItemIn] = Field(min_length=1, max_length=100)
+
+
+class ShopPatch(BaseModel):
+    done: bool | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+@app.get("/api/shopping")
+def get_shopping(uid: int = Depends(current_user)):
+    return store.list_shopping(uid)
+
+
+@app.post("/api/shopping", status_code=201)
+def post_shopping(body: ShopAddIn, uid: int = Depends(current_user)):
+    if len(store.list_shopping(uid)) + len(body.items) > 300:
+        raise HTTPException(422, "Die Einkaufsliste ist voll (höchstens 300 Einträge). Lösche zuerst Erledigtes.")
+    return store.add_shopping(uid, [i.model_dump() for i in body.items])
+
+
+@app.patch("/api/shopping/{item_id}")
+def patch_shopping(item_id: int, body: ShopPatch, uid: int = Depends(current_user)):
+    changes = body.model_dump(exclude_none=True)
+    if "title" in changes:
+        changes["title"] = changes["title"].strip()
+        if not changes["title"]:
+            raise HTTPException(422, "Bitte etwas eintragen.")
+    row = store.update_shopping(uid, item_id, changes)
+    if not row:
+        raise HTTPException(404, "Eintrag nicht gefunden")
+    return row
+
+
+@app.delete("/api/shopping/done")
+def clear_shopping(uid: int = Depends(current_user)):
+    return {"deleted": store.clear_shopping_done(uid)}
+
+
+@app.delete("/api/shopping/{item_id}")
+def remove_shopping(item_id: int, uid: int = Depends(current_user)):
+    if not store.delete_shopping(uid, item_id):
+        raise HTTPException(404, "Eintrag nicht gefunden")
     return {"ok": True}
 
 

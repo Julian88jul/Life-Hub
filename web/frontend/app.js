@@ -164,6 +164,7 @@
     { key: "classes", label: "Stundenplan heute", icon: "🗓️", desc: "Erscheint nur an Tagen mit Veranstaltungen" },
     { key: "today", label: "Heute", icon: "📌", desc: "Termine und fällige Aufgaben" },
     { key: "upcoming", label: "Nächste 7 Tage", icon: "📅", desc: "Was als Nächstes ansteht" },
+    { key: "shopping", label: "Einkaufsliste", icon: "🛒", desc: "Abhaken beim Einkaufen, Zutaten aus Rezepten", off: true },
     { key: "market", label: "Börse", icon: "📈", desc: "Indizes, Stimmung und KI-Briefing" },
     { key: "recipes", label: "Rezepte", icon: "🍳", desc: "Deine neuesten Rezepte" },
     { key: "tiles", label: "Schnellzugriff", icon: "🔲", desc: "Aufgaben, Assistent und mehr" },
@@ -179,9 +180,13 @@
     const keys = WIDGETS.map((w) => w.key), tabKeys = OPTIONAL_TABS.map((t) => t.key);
     const src = l && typeof l === "object" ? l : {};
     const order = (Array.isArray(src.order) ? src.order : []).filter((k, i, a) => keys.includes(k) && a.indexOf(k) === i);
+    const known = [...order]; // was das Konto schon kennt
     for (const k of keys) if (!order.includes(k)) order.push(k);
     const pick = (list, allowed) => (Array.isArray(list) ? list : []).filter((k, i, a) => allowed.includes(k) && a.indexOf(k) === i);
-    return { order, hidden: pick(src.hidden, keys), tabs_hidden: pick(src.tabs_hidden, tabKeys) };
+    const hidden = pick(src.hidden, keys);
+    // Neue Widgets, die erst auf Wunsch erscheinen (Einkaufsliste), bleiben aus, bis man sie hinzufügt
+    for (const w of WIDGETS) if (w.off && !known.includes(w.key) && !hidden.includes(w.key)) hidden.push(w.key);
+    return { order, hidden, tabs_hidden: pick(src.tabs_hidden, tabKeys) };
   }
   let layout = normLayout(store.get("layout", null));
   let editing = false;
@@ -300,7 +305,7 @@
     bindGrip(grip, w);
     w.append(rm, grip);
     // Gedrückt halten auf einem Widget startet das Anpassen (wie auf dem iPhone-Home-Bildschirm)
-    longPress(w, enterEdit, ".w-remove, .w-grip, input, textarea, .seg, .weather");
+    longPress(w, enterEdit, ".w-remove, .w-grip, input, textarea, .seg, .weather, .task");
   });
   // Im Anpassen-Modus öffnen Widgets nichts (Antippen von Börse, Rezepten, Kacheln usw. ist gesperrt)
   widgetBox.addEventListener("click", (e) => {
@@ -549,6 +554,7 @@
     if (widgetOn("weather")) renderWeather();
     if (widgetOn("market")) { loadMarket(); loadBriefing(); }
     if (widgetOn("recipes")) loadRecipes();
+    if (widgetOn("shopping")) loadShopping();
     try {
       const [evs, todos, classes] = await Promise.all([api(`/api/events?from=${todayKey}&to=${weekKey}`), api("/api/todos"), api("/api/timetable")]);
       renderTodayClasses(classes);
@@ -1030,7 +1036,7 @@
     $("sheet").hidden = false;
     setTimeout(() => $("f-title").focus(), 50);
   }
-  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet", "recipe-sheet", "rimport-sheet", "layout-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
+  function closeSheet() { for (const id of ["sheet", "list-sheet", "task-sheet", "pw-sheet", "class-sheet", "import-sheet", "share-sheet", "peek-sheet", "recipe-sheet", "rimport-sheet", "layout-sheet", "rshare-sheet", "shop-pick-sheet"]) $(id).hidden = true; $("sheet-backdrop").hidden = true; impSession++; }
   $("f-cancel").addEventListener("click", closeSheet);
   $("sheet-backdrop").addEventListener("click", closeSheet);
   document.addEventListener("keydown", (e) => {
@@ -2138,7 +2144,7 @@
   ];
   const recipeCat = (key) => RECIPE_CATS.find((c) => c.key === key) || RECIPE_CATS[RECIPE_CATS.length - 1];
   // items: Liste (mit Vorschaubild, ohne großes Foto); open: angezeigtes Rezept; got: beim Kochen abgehakte Zutaten
-  const rs = { items: [], loadedAt: 0, error: "", filter: "all", query: "", open: null, openId: null, got: new Set() };
+  const rs = { items: [], loadedAt: 0, error: "", filter: "all", query: "", open: null, openId: null, got: new Set(), serv: null }; // serv: gewünschte Portionen
   const jpegSrc = (b64) => `data:image/jpeg;base64,${b64}`;
   const recipeLines = (text) => text.split("\n").map((s) => s.trim()).filter(Boolean);
 
@@ -2206,6 +2212,7 @@
     $("recipe-grid").replaceChildren(...list.map((r) => {
       const body = el("div", { className: "rt-body" }, el("b", { textContent: r.name }));
       const meta = recipeMeta(r);
+      if (r.from_name) meta.push(`von ${r.from_name}`);
       if (meta.length) body.append(el("small", { textContent: meta.join(" · ") }));
       const tile = el("button", { type: "button", className: "recipe-tile" }, recipePic(r), body);
       tile.addEventListener("click", () => openRecipe(r));
@@ -2224,7 +2231,7 @@
   // Rezept öffnen: sofort mit den Daten aus der Liste, das vollständige Rezept (Foto, Schritte) kommt gleich danach
   async function openRecipe(r) {
     const id = r.id;
-    if (rs.openId !== id) rs.got = new Set();
+    if (rs.openId !== id) { rs.got = new Set(); rs.serv = r.servings || null; }
     rs.openId = id;
     if (!rs.open || rs.open.id !== id) rs.open = { ...r, steps: [], note: "", partial: true };
     renderRecipeDetail();
@@ -2247,13 +2254,25 @@
     $("rd-name").textContent = r.name;
     $("rd-hero").replaceChildren(...(r.photo || r.thumb ? [recipePic(r, true)] : []));
     const cat = recipeCat(r.category);
-    $("rd-meta").replaceChildren(...[`${cat.emoji} ${cat.label}`, ...recipeMeta(r, true)].map((t) => el("span", { textContent: t })));
+    // Portionen stehen im Umrechner über den Zutaten, hier nur Kategorie und Dauer
+    const chips = [`${cat.emoji} ${cat.label}`, ...recipeMeta({ ...r, servings: null }, true)];
+    if (r.from_name) chips.push(`📨 von ${r.from_name}`); // von einem Freund geteilt
+    $("rd-meta").replaceChildren(...chips.map((t) => el("span", { textContent: t })));
     const ing = r.ingredients || [];
-    $("rd-ing-head").hidden = $("rd-ingredients").hidden = $("rd-hint").hidden = !ing.length;
+    const factor = recipeFactor(r);
+    $("rd-ing-head").hidden = $("rd-ingredients").hidden = $("rd-hint").hidden = $("rd-shop").hidden = !ing.length;
+    $("rd-servings").hidden = !r.servings;
+    if (r.servings) {
+      $("rd-serv-label").textContent = `${rs.serv} ${rs.serv === 1 ? "Portion" : "Portionen"}`;
+      $("rd-minus").disabled = rs.serv <= 1;
+      $("rd-plus").disabled = rs.serv >= 100;
+    }
+    $("rd-scaled").hidden = factor === 1;
+    $("rd-scaled-text").textContent = factor === 1 ? "" : `Umgerechnet, im Rezept stehen ${r.servings} ${r.servings === 1 ? "Portion" : "Portionen"}.`;
     $("rd-ingredients").replaceChildren(...ing.map((text, i) => {
       // Zeilen wie „Für den Teig:“ sind Zwischenüberschriften
       if (/:\s*$/.test(text)) return el("li", { className: "rd-sub", textContent: text.replace(/:\s*$/, "") });
-      const li = el("li", { tabIndex: 0 }, el("span", { className: "rd-tick", ariaHidden: "true" }), el("span", { className: "rd-txt", textContent: text }));
+      const li = el("li", { tabIndex: 0 }, el("span", { className: "rd-tick", ariaHidden: "true" }), el("span", { className: "rd-txt", textContent: scaleLine(text, factor) }));
       li.setAttribute("role", "checkbox");
       const paint = () => { li.classList.toggle("got", rs.got.has(i)); li.setAttribute("aria-checked", String(rs.got.has(i))); };
       const toggle = () => { if (rs.got.has(i)) rs.got.delete(i); else rs.got.add(i); paint(); };
@@ -2405,6 +2424,7 @@
       const saved = await api(editing ? `/api/recipes/${editing.id}` : "/api/recipes", { method: editing ? "PUT" : "POST", body });
       closeSheet();
       rs.got = new Set();
+      rs.serv = saved.servings || null;
       rs.open = saved;
       rs.openId = saved.id;
       renderRecipeDetail();
@@ -2509,6 +2529,251 @@
       try { rs.open = await api(`/api/recipes/${rs.open.id}`); } catch (e) { showToast(e.message); return; }
     }
     openRecipeSheet(rs.open);
+  });
+
+  // ---------- Portionen umrechnen ----------
+  // Erkennt Mengen am Zeilenanfang: 200 · 1,5 · 1.5 · 1/2 · 1 1/2 · 1½ · ½ · Bereiche wie 2-3
+  const FRACTIONS = { "½": 1 / 2, "¼": 1 / 4, "¾": 3 / 4, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 1 / 8, "⅕": 1 / 5 };
+  const NUM = "(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:[.,]\\d+)?(?:\\s*[½¼¾⅓⅔⅛⅕])?|[½¼¾⅓⅔⅛⅕])";
+  const QTY_RE = new RegExp(`^(${NUM})(?:\\s*[-–]\\s*(${NUM}))?(?=[\\s.a-zA-ZäöüÄÖÜß]|$)`);
+  const NO_SCALE = /^(prisen?|msp\.?|messerspitzen?|etwas|n\.\s*b\.|nach geschmack)\b/i; // „1 Prise Salz“ bleibt
+  const UNIT_RE = /^(g|kg|mg|ml|l|cl|dl|el|tl|stk\.?|stück|pck\.?|päckchen|packung(en)?|becher|dosen?|tassen?|bund|zehen?|scheiben?|prisen?|msp\.?|handvoll|gläser|glas|würfel|zweige?|blätter|blatt)(?=\s|$)\.?/i;
+
+  function parseNum(s) {
+    s = s.trim();
+    let m = s.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+    if (m) return Number(m[1]) + Number(m[2]) / Number(m[3]);
+    m = s.match(/^(\d+)\/(\d+)$/);
+    if (m) return Number(m[1]) / Number(m[2]);
+    if (FRACTIONS[s]) return FRACTIONS[s];
+    m = s.match(/^(\d+(?:[.,]\d+)?)\s*([½¼¾⅓⅔⅛⅕])?$/);
+    return m ? Number(m[1].replace(",", ".")) + (m[2] ? FRACTIONS[m[2]] : 0) : NaN;
+  }
+
+  // Lesbar runden: ab 100 auf 5, ab 10 ganzzahlig, darunter auf Viertel bzw. Drittel (als ½, ¼, ⅓ …)
+  function formatNum(x) {
+    if (x >= 100) return String(Math.round(x / 5) * 5);
+    if (x >= 10) return String(Math.round(x));
+    const parts = [[0, ""], [1 / 4, "¼"], [1 / 3, "⅓"], [1 / 2, "½"], [2 / 3, "⅔"], [3 / 4, "¾"], [1, ""]];
+    let whole = Math.floor(x), best = parts[0];
+    for (const p of parts) if (Math.abs(x - whole - p[0]) < Math.abs(x - whole - best[0])) best = p;
+    if (best[0] === 1) { whole += 1; best = parts[0]; }
+    if (!whole && !best[1]) return "⅛"; // sehr kleine Mengen nicht auf 0 runden
+    return `${whole || ""}${best[1]}`;
+  }
+
+  function scaleLine(line, factor) {
+    if (factor === 1) return line;
+    const m = line.match(QTY_RE);
+    if (!m) return line; // ohne Menge, z. B. „Puderzucker“
+    const rest = line.slice(m[0].length);
+    if (NO_SCALE.test(rest.trim())) return line;
+    const a = parseNum(m[1]), b = m[2] ? parseNum(m[2]) : null;
+    if (Number.isNaN(a) || (b !== null && Number.isNaN(b))) return line;
+    return formatNum(a * factor) + (b !== null ? `–${formatNum(b * factor)}` : "") + rest;
+  }
+
+  const recipeFactor = (r) => (r && r.servings && rs.serv ? rs.serv / r.servings : 1);
+
+  // Name ohne Menge und Einheit („125 g Butter, weich“ → „butter“), für den Vorrat
+  function ingredientName(line) {
+    const m = line.match(QTY_RE);
+    let rest = (m ? line.slice(m[0].length) : line).trim().replace(UNIT_RE, "").trim();
+    rest = rest.replace(/^(etwas|frische[nrs]?|n\.\s*b\.)\s+/i, "").replace(/\(.*?\)/g, "").split(",")[0];
+    return rest.trim().toLowerCase();
+  }
+
+  function setServings(n) {
+    const r = rs.open;
+    if (!r || !r.servings) return;
+    rs.serv = Math.max(1, Math.min(100, n));
+    renderRecipeDetail();
+  }
+  $("rd-minus").addEventListener("click", () => setServings(rs.serv - 1));
+  $("rd-plus").addEventListener("click", () => setServings(rs.serv + 1));
+  $("rd-scaled-reset").addEventListener("click", () => rs.open && setServings(rs.open.servings));
+
+  // ---------- Rezept teilen: an Freunde (eigene Kopie) oder als Text an jede App ----------
+  function recipeText(r) {
+    const f = recipeFactor(r);
+    const lines = [r.name];
+    const meta = [];
+    if (r.servings) meta.push(`für ${rs.serv} ${rs.serv === 1 ? "Portion" : "Portionen"}`);
+    if (r.minutes) meta.push(durText(r.minutes));
+    if (meta.length) lines.push(meta.join(" · "));
+    if ((r.ingredients || []).length) {
+      lines.push("", "Zutaten:");
+      for (const i of r.ingredients) lines.push(/:\s*$/.test(i) ? `\n${i}` : `• ${scaleLine(i, f)}`);
+    }
+    if ((r.steps || []).length) lines.push("", "Zubereitung:", ...r.steps.map((s, i) => `${i + 1}. ${s}`));
+    if (r.note) lines.push("", r.note);
+    lines.push("", "Geteilt aus Life Hub");
+    return lines.join("\n");
+  }
+
+  async function openRecipeShare() {
+    if (!rs.open) return;
+    if (rs.open.partial) {
+      try { rs.open = await api(`/api/recipes/${rs.open.id}`); } catch (e) { showToast(e.message); return; }
+    }
+    const r = rs.open;
+    $("rs-lead").textContent = `„${r.name}": Freunde bekommen eine eigene Kopie mit Foto in ihre Rezepte.`;
+    const friends = friendsState.friends;
+    $("rs-friends-head").hidden = !friends.length;
+    $("rs-no-friends").hidden = friends.length > 0;
+    $("rs-friends").replaceChildren(...friends.map((f) => {
+      const btn = friendBtn("Senden", "primary", async () => {
+        btn.disabled = true;
+        $("rs-error").hidden = true;
+        try {
+          await api(`/api/recipes/${r.id}/send`, { method: "POST", body: { friend_id: f.id } });
+          btn.textContent = "Gesendet ✓";
+          showToast(`„${r.name}" an ${f.username} geschickt.`);
+        } catch (e) { btn.disabled = false; $("rs-error").textContent = e.message; $("rs-error").hidden = false; }
+      });
+      return el("li", { className: "friend-row" }, avatar(f), el("span", { className: "friend-name", textContent: f.username }), btn);
+    }));
+    $("rs-error").hidden = true;
+    $("sheet-backdrop").hidden = false;
+    $("rshare-sheet").hidden = false;
+  }
+  $("rd-share").addEventListener("click", openRecipeShare);
+  $("rs-close").addEventListener("click", closeSheet);
+  $("rs-text").addEventListener("click", async () => {
+    const r = rs.open;
+    if (!r) return;
+    const text = recipeText(r);
+    if (navigator.share) {
+      try { await navigator.share({ title: r.name, text }); } catch (e) { if (e && e.name !== "AbortError") showToast("Teilen hat nicht geklappt."); }
+      return;
+    }
+    try { await navigator.clipboard.writeText(text); showToast("Rezept kopiert. Jetzt in einer App einfügen."); }
+    catch { showToast("Kopieren nicht erlaubt."); }
+  });
+
+  // ---------- Einkaufsliste (Widget auf „Heute“) ----------
+  const shop = { items: [] };
+
+  async function loadShopping() {
+    try { shop.items = await api("/api/shopping"); } catch (e) { $("shop-empty").textContent = e.message; $("shop-empty").hidden = false; return; }
+    renderShopping();
+  }
+
+  function renderShopping() {
+    const open = shop.items.filter((i) => !i.done), done = shop.items.filter((i) => i.done);
+    $("shop-list").replaceChildren(...[...open, ...done].map((it) => taskRow(
+      { ...it, list_color: "#10b981", list_emoji: "🍳", list_name: it.note },
+      { showList: !!it.note, onToggle: (_, li) => toggleShop(it, li), onDelete: (_, li) => deleteShop(it, li) },
+    )));
+    $("shop-empty").textContent = "Noch leer. Trag etwas ein oder hol dir Zutaten aus einem Rezept.";
+    $("shop-empty").hidden = shop.items.length > 0;
+    $("shop-clear").hidden = !done.length;
+  }
+
+  async function toggleShop(it, li) {
+    const next = !it.done;
+    li.classList.toggle("done", next);
+    const btn = li.querySelector(".check");
+    btn.setAttribute("aria-pressed", String(next));
+    btn.disabled = true;
+    try {
+      Object.assign(it, await api(`/api/shopping/${it.id}`, { method: "PATCH", body: { done: next } }));
+      await sleep(next ? 450 : 150); // erst der Haken, dann wandert die Zeile nach unten
+      renderShopping();
+    } catch (e) {
+      li.classList.toggle("done", !next);
+      btn.setAttribute("aria-pressed", String(!next));
+      btn.disabled = false;
+      alert(e.message);
+    }
+  }
+
+  async function deleteShop(it, li) {
+    try {
+      await api(`/api/shopping/${it.id}`, { method: "DELETE" });
+      shop.items = shop.items.filter((x) => x.id !== it.id);
+      li.classList.add("leaving");
+      await sleep(220);
+      renderShopping();
+    } catch (e) { alert(e.message); }
+  }
+
+  $("shop-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("shop-input").value.trim();
+    if (!title) return;
+    try {
+      shop.items.push(...(await api("/api/shopping", { method: "POST", body: { items: [{ title }] } })));
+      $("shop-input").value = "";
+      renderShopping();
+    } catch (err) { showToast(err.message); }
+  });
+  $("shop-clear").addEventListener("click", async () => {
+    try {
+      await api("/api/shopping/done", { method: "DELETE" });
+      shop.items = shop.items.filter((i) => !i.done);
+      renderShopping();
+    } catch (e) { alert(e.message); }
+  });
+
+  // Zutaten auswählen; Vorrat (z. B. Mehl, Salz) ist abgewählt und lernt mit
+  const DEFAULT_PANTRY = ["salz", "pfeffer", "wasser", "öl", "olivenöl", "rapsöl", "mehl", "zucker"];
+  const getPantry = () => store.get("pantry", DEFAULT_PANTRY);
+  const inPantry = (name, pantry) => pantry.some((p) => name === p || name.startsWith(`${p} `));
+  let spRows = [];
+
+  function updateShopPickButton() {
+    const n = spRows.filter((x) => x.on).length;
+    $("sp-add").textContent = n ? `Hinzufügen (${n})` : "Nichts ausgewählt";
+    $("sp-add").disabled = !n;
+  }
+
+  async function openShopPick() {
+    if (!rs.open) return;
+    const r = rs.open, f = recipeFactor(r), pantry = getPantry();
+    spRows = (r.ingredients || []).filter((t) => !/:\s*$/.test(t)).map((t) => {
+      const name = ingredientName(t);
+      return { line: scaleLine(t, f), name, on: !inPantry(name, pantry) };
+    });
+    $("sp-lead").textContent = `${r.name}${r.servings ? `, für ${rs.serv} ${rs.serv === 1 ? "Portion" : "Portionen"}` : ""}. Wähle ab, was du schon zu Hause hast.`;
+    $("sp-list").replaceChildren(...spRows.map((row) => {
+      const input = el("input", { type: "checkbox", checked: row.on });
+      input.addEventListener("change", () => { row.on = input.checked; updateShopPickButton(); });
+      return el("li", {}, el("label", {}, input, el("span", { className: "prop-main" }, el("b", { textContent: row.line }))));
+    }));
+    $("sp-error").hidden = true;
+    updateShopPickButton();
+    $("sheet-backdrop").hidden = false;
+    $("shop-pick-sheet").hidden = false;
+  }
+  $("rd-shop").addEventListener("click", openShopPick);
+  $("sp-cancel").addEventListener("click", closeSheet);
+  $("sp-add").addEventListener("click", async () => {
+    const r = rs.open;
+    const chosen = spRows.filter((x) => x.on);
+    if (!r || !chosen.length) return;
+    // Vorrat merken: Abgewähltes kommt hinzu, Ausgewähltes fällt heraus
+    let pantry = getPantry();
+    for (const row of spRows) {
+      if (!row.name) continue;
+      if (!row.on && !inPantry(row.name, pantry)) pantry.push(row.name);
+      if (row.on) pantry = pantry.filter((p) => !(row.name === p || row.name.startsWith(`${p} `)));
+    }
+    store.set("pantry", pantry);
+    $("sp-add").disabled = true;
+    try {
+      const added = await api("/api/shopping", { method: "POST", body: { items: chosen.map((x) => ({ title: x.line.slice(0, 200), note: r.name.slice(0, 120) })) } });
+      shop.items.push(...added);
+      closeSheet();
+      const n = added.length, what = `${n} ${n === 1 ? "Zutat" : "Zutaten"} auf der Einkaufsliste.`;
+      if (!widgetOn("shopping")) {
+        layout.hidden = layout.hidden.filter((k) => k !== "shopping");
+        applyLayout();
+        saveLayout();
+        showToast(`${what} Du findest sie jetzt auf „Heute“.`);
+      } else showToast(what);
+      renderShopping();
+    } catch (e) { $("sp-error").textContent = e.message; $("sp-error").hidden = false; $("sp-add").disabled = false; }
   });
 
   // ---------- Mein Bild (Figur wählen) ----------
