@@ -162,16 +162,16 @@
   const WIDGETS = [
     { key: "voice", label: "Sprechen", icon: "🎙️", desc: "Termine per Sprache eintragen" },
     { key: "weather", label: "Wetter", icon: "🌤️", desc: "Heute und morgen an deinem Ort" },
-    { key: "classes", label: "Stundenplan heute", icon: "🗓️", desc: "Erscheint nur an Tagen mit Veranstaltungen" },
+    { key: "classes", label: "Stundenplan heute", icon: "🗓️", desc: "Erscheint nur an Tagen mit Veranstaltungen", off: true },
     { key: "today", label: "Heute", icon: "📌", desc: "Termine und fällige Aufgaben" },
     { key: "upcoming", label: "Nächste 7 Tage", icon: "📅", desc: "Was als Nächstes ansteht" },
     { key: "shopping", label: "Einkaufsliste", icon: "🛒", desc: "Abhaken beim Einkaufen, Zutaten aus Rezepten", off: true },
-    { key: "market", label: "Börse", icon: "📈", desc: "Indizes, Stimmung und KI-Briefing" },
-    { key: "recipes", label: "Rezepte", icon: "🍳", desc: "Deine neuesten Rezepte" },
+    { key: "market", label: "Börse", icon: "📈", desc: "Indizes, Stimmung und KI-Briefing", off: true },
+    { key: "recipes", label: "Rezepte", icon: "🍳", desc: "Deine neuesten Rezepte", off: true },
     { key: "tiles", label: "Schnellzugriff", icon: "🔲", desc: "Aufgaben, Assistent und mehr" },
   ];
   const OPTIONAL_TABS = [
-    { key: "plan", label: "Stundenplan", icon: "🗓️" },
+    { key: "plan", label: "Stundenplan", icon: "🗓️", off: true },
     { key: "todos", label: "Aufgaben", icon: "✅" },
     { key: "chat", label: "Assistent", icon: "💬" },
   ];
@@ -185,9 +185,12 @@
     for (const k of keys) if (!order.includes(k)) order.push(k);
     const pick = (list, allowed) => (Array.isArray(list) ? list : []).filter((k, i, a) => allowed.includes(k) && a.indexOf(k) === i);
     const hidden = pick(src.hidden, keys);
-    // Neue Widgets, die erst auf Wunsch erscheinen (Einkaufsliste), bleiben aus, bis man sie hinzufügt
+    // Besondere Widgets (Stundenplan heute, Einkaufsliste, Börse, Rezepte) sind in der Standard-Startseite aus,
+    // bis man sie hinzufügt; eine gespeicherte Startseite behält ihre Auswahl
     for (const w of WIDGETS) if (w.off && !known.includes(w.key) && !hidden.includes(w.key)) hidden.push(w.key);
-    return { order, hidden, tabs_hidden: pick(src.tabs_hidden, tabKeys) };
+    // Ebenso der Stundenplan-Tab, solange noch nichts zu den Tabs gespeichert ist
+    const tabsHidden = Array.isArray(src.tabs_hidden) ? pick(src.tabs_hidden, tabKeys) : OPTIONAL_TABS.filter((t) => t.off).map((t) => t.key);
+    return { order, hidden, tabs_hidden: tabsHidden };
   }
   let layout = normLayout(store.get("layout", null));
   let editing = false;

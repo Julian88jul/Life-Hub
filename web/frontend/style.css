@@ -1347,3 +1347,15 @@ body.home-editing .w-grip {
 .push-box .btn.small { flex: none; min-height: 38px; padding: 0 14px; font-size: 14px; }
 .push-test { display: block; margin: -2px 0 4px; min-height: 36px; padding: 4px 0; font-size: 14px; }
 .remind-hint { margin: -4px 0 10px; }
+
+/* ---------- Haken und Zeilen: sauber auf dem iPhone ---------- */
+/* Safari zeichnet Knöpfe sonst selbst (beim Antippen und während der kurzen Sperre nach dem Tippen) */
+.check, .check:active, .check:focus, .check:disabled {
+  -webkit-appearance: none; appearance: none; background: transparent; opacity: 1; outline: none; box-shadow: none;
+}
+.check:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: 50%; }
+.check::before { top: 9px; right: 9px; bottom: 9px; left: 9px; background-clip: padding-box; }
+/* Zeilen-Hintergrund nur beim Wischen (verdeckt dann die grüne bzw. rote Fläche); sonst gilt die Karte darunter */
+.swipe-content { background: transparent; }
+.swipe-row.swiping > .swipe-content { background: var(--row-bg); }
+.swipe-content:active { background-color: color-mix(in srgb, var(--text) 6%, transparent); }
