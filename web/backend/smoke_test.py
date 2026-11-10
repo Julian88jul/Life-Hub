@@ -584,6 +584,12 @@ with TestClient(main.app) as c:
     check("Inhalt der Benachrichtigung", pushed and pushed[0][1]["title"] == "🩺 Zahnarzt" and pushed[0][1]["body"].endswith(" Uhr")
           and pushed[0][1]["url"] == f"./#day={ev_soon['start_date']}", str(pushed)[:200])
     check("Kein zweites Mal", c.post("/api/push/tick", headers={"X-Tick-Secret": "tick-geheim"}).json() == {"due": 0, "sent": 0})
+    os.environ["TICK_SECRET"] = "\ufefftick-geheim\r\n"  # so legt PowerShell es per Pipe an
+    check("Geheimnis mit BOM und Zeilenumbruch klappt", c.post("/api/push/tick", headers={"X-Tick-Secret": "tick-geheim"}).status_code == 200)
+    check("Header mit Sonderzeichen: 403 statt Absturz", c.post("/api/push/tick", headers={"X-Tick-Secret": "tick-geheim-ä".encode("utf-8")}).status_code == 403)
+    check("Health meldet Push bereit", c.get("/api/health").json()["push_configured"] is True)
+    os.environ["VAPID_PRIVATE_KEY"] = "\ufeff" + os.environ["VAPID_PRIVATE_KEY"] + "\r\n"
+    check("Push-Schlüssel mit BOM lesbar", c.get("/api/push/key", headers=H).json()["enabled"] is True)
     r = c.put(f"/api/events/{soon_id}", json={**ev_soon, "title": "Zahnarzt Dr. Weiß"}, headers=H)
     check("Bearbeiten nach der Erinnerung löst keine zweite aus", r.json()["reminded"] is True)
     r = c.put(f"/api/events/{later_id}", json={"title": "Später", "start_date": later.date().isoformat(), "remind_minutes": None}, headers=H)

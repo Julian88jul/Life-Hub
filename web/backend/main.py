@@ -783,8 +783,13 @@ PUSH_STALE = 2 * 3600  # Erinnerungen, die über 2 Stunden zu spät wären, verf
 _vapid_public_cache: dict[str, str] = {}
 
 
+def _clean_secret(name: str) -> str:
+    """Geheimnis aus der Umgebung ohne BOM und Zeilenumbruch (PowerShell hängt beides beim Anlegen per Pipe an)."""
+    return os.getenv(name, "").replace("\ufeff", "").strip()
+
+
 def _vapid_private() -> str:
-    return os.getenv("VAPID_PRIVATE_KEY", "").strip()
+    return _clean_secret("VAPID_PRIVATE_KEY")
 
 
 def _vapid_public() -> str:
@@ -886,8 +891,8 @@ def push_test(uid: int = Depends(current_user)):
 @app.post("/api/push/tick")
 def push_tick(x_tick_secret: str | None = Header(default=None)):
     """Wird jede Minute von Cloud Scheduler aufgerufen und verschickt fällige Erinnerungen."""
-    secret = os.getenv("TICK_SECRET", "").strip()  # Zeilenumbruch beim Anlegen per PowerShell ignorieren
-    if not secret or not x_tick_secret or not hmac.compare_digest(x_tick_secret, secret):
+    secret = _clean_secret("TICK_SECRET")
+    if not secret or not x_tick_secret or not hmac.compare_digest(x_tick_secret.encode(), secret.encode()):
         raise HTTPException(403, "Nicht erlaubt")
     now = time.time()
     due = store.due_reminders(now)
@@ -1746,11 +1751,16 @@ async def chat(body: ChatIn, uid: int = Depends(current_user)):
 
 @app.get("/api/health")
 def health():
+    try:
+        push_ready = bool(_vapid_public())  # Schlüssel lesbar? (zeigt nichts davon)
+    except Exception:
+        push_ready = False
     return {
         "ok": True,
         "llm_configured": llm.is_configured(),
         "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         "storage": store.backend_name,
+        "push_configured": push_ready,
     }
 
 
