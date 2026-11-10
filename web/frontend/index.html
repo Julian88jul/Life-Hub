@@ -15,9 +15,9 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+  <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=42">
+  <link rel="stylesheet" href="style.css?v=43">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -56,7 +56,6 @@
         <div class="top-actions">
           <button type="button" class="chip" id="loc-chip" aria-label="Ort ändern" aria-expanded="false">📍 <span id="loc-name">Berlin</span></button>
           <button type="button" class="icon-btn small friends-btn" id="friends-btn" aria-label="Freunde" title="Freunde"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.8" cy="9.5" r="2.5"/><path d="M15.6 14.2c2.4-.3 4.4 1.3 4.9 4.3"/></svg><span class="badge" id="friends-badge" hidden></span></button>
-          <button type="button" class="icon-btn small" id="theme-btn" aria-label="Hell oder dunkel umschalten" title="Hell/Dunkel">🌓</button>
         </div>
       </header>
       <div class="card loc-panel" id="loc-panel" hidden>
@@ -151,10 +150,10 @@
       </div>
       <div class="widget" data-widget="tiles">
       <div class="tiles">
-        <div class="tile disabled"><span>✉️</span><b>E-Mails</b><small>bald</small></div>
-        <div class="tile" data-goto="todos"><span>✅</span><b>Aufgaben</b><small id="tile-tasks-sub">öffnen</small></div>
-        <div class="tile disabled"><span>💡</span><b>Licht</b><small>später</small></div>
-        <div class="tile" data-goto="chat"><span>💬</span><b>Assistent</b><small>fragen</small></div>
+        <div class="tile disabled"><span class="tile-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="3"/><path d="m4.5 7.5 7.5 6 7.5-6"/></svg></span><b>E-Mails</b><small>bald</small></div>
+        <button type="button" class="tile" data-goto="todos"><span class="tile-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="m8 12.2 2.7 2.7L16.2 9.3"/></svg></span><b>Aufgaben</b><small id="tile-tasks-sub">öffnen</small></button>
+        <div class="tile disabled"><span class="tile-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg></span><b>Licht</b><small>später</small></div>
+        <button type="button" class="tile" data-goto="chat"><span class="tile-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8 8 0 0 1-11.7 7.1L4 20l.9-4.3A8 8 0 1 1 20.5 12Z"/><path d="M12 8.6l.9 1.9 1.9.9-1.9.9-.9 1.9-.9-1.9-1.9-.9 1.9-.9z"/></svg></span><b>Assistent</b><small>fragen</small></button>
       </div>
       </div>
       </div>
@@ -176,6 +175,7 @@
         <div class="row-between theme-row">
           <span class="muted">Darstellung</span>
           <div class="seg" id="theme-seg" role="group" aria-label="Darstellung">
+            <button type="button" data-theme-set="auto">Automatisch</button>
             <button type="button" data-theme-set="light">Hell</button>
             <button type="button" data-theme-set="dark">Dunkel</button>
           </div>
@@ -276,8 +276,8 @@
           <button type="button" class="icon-btn" id="todo-back" aria-label="Zurück zu den Listen">‹</button>
           <div class="detail-title"><span class="detail-emoji" id="td-emoji"></span><h1 id="td-name"></h1></div>
           <div class="top-actions">
-            <button type="button" class="icon-btn" id="td-edit" aria-label="Liste bearbeiten">✏️</button>
-            <button type="button" class="icon-btn" id="td-delete" aria-label="Liste löschen">🗑</button>
+            <button type="button" class="icon-btn line-icon" id="td-edit" aria-label="Liste bearbeiten"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg></button>
+            <button type="button" class="icon-btn line-icon danger" id="td-delete" aria-label="Liste löschen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M10 4h4M6.5 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5l1-12.5"/><path d="M10 11v6M14 11v6"/></svg></button>
           </div>
         </header>
         <div class="progress" aria-hidden="true"><div class="bar" id="td-bar"></div></div>
@@ -422,8 +422,8 @@
         <div class="detail-title"><h1 id="rd-name"></h1></div>
         <div class="top-actions">
           <button type="button" class="icon-btn" id="rd-share" aria-label="Rezept teilen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14.5V3.5M8 7.5l4-4 4 4"/><path d="M7.5 11H6a2 2 0 0 0-2 2v6.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V13a2 2 0 0 0-2-2h-1.5"/></svg></button>
-          <button type="button" class="icon-btn" id="rd-edit" aria-label="Rezept bearbeiten">✏️</button>
-          <button type="button" class="icon-btn" id="rd-delete" aria-label="Rezept löschen">🗑</button>
+          <button type="button" class="icon-btn line-icon" id="rd-edit" aria-label="Rezept bearbeiten"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></svg></button>
+          <button type="button" class="icon-btn line-icon danger" id="rd-delete" aria-label="Rezept löschen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M10 4h4M6.5 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5l1-12.5"/><path d="M10 11v6M14 11v6"/></svg></button>
         </div>
       </header>
       <div class="rd-hero" id="rd-hero"></div>
@@ -754,8 +754,8 @@
     </div>
   </div>
 
-  <script src="avatars.js?v=42"></script>
-  <script src="config.js?v=42"></script>
-  <script src="app.js?v=42"></script>
+  <script src="avatars.js?v=43"></script>
+  <script src="config.js?v=43"></script>
+  <script src="app.js?v=43"></script>
 </body>
 </html>

@@ -99,20 +99,35 @@
   $("logout").addEventListener("click", () => logout(true));
 
   // ---------- Hell / Dunkel ----------
-  const THEMES = ["light", "dark"];
-  // Ohne bisherige Wahl gilt das dunkle Design; danach zählt nur noch die eigene Wahl
-  function currentTheme() { const t = store.get("theme", null); return THEMES.includes(t) ? t : "dark"; }
+  // Standard ist „Automatisch“: Life Hub folgt der Einstellung des Geräts (auch beim Wechsel am Abend).
+  // Hell oder Dunkel lässt sich in den Einstellungen festlegen.
+  const THEMES = ["auto", "light", "dark"];
+  const systemLight = window.matchMedia("(prefers-color-scheme: light)");
+  function currentTheme() { const t = store.get("theme", null); return THEMES.includes(t) ? t : "auto"; }
   function applyTheme(mode, save = true) {
-    document.documentElement.setAttribute("data-theme", mode);
+    const resolved = mode === "auto" ? (systemLight.matches ? "light" : "dark") : mode;
+    document.documentElement.setAttribute("data-theme", resolved);
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = mode === "dark" ? "#07080d" : "#eceef5";
+    if (meta) meta.content = resolved === "dark" ? "#07080d" : "#eceef5";
     if (save) store.set("theme", mode);
     document.querySelectorAll("[data-theme-set]").forEach((b) => b.classList.toggle("active", b.dataset.themeSet === mode));
-    $("theme-btn").textContent = mode === "dark" ? "☀️" : "🌙"; // zeigt, wohin der Knopf umschaltet
   }
   document.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => applyTheme(b.dataset.themeSet)));
-  $("theme-btn").addEventListener("click", () => applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark"));
+  systemLight.addEventListener("change", () => { if (currentTheme() === "auto") applyTheme("auto", false); });
   applyTheme(currentTheme(), false);
+
+  // Dynamic Type: die Textgröße aus den iPhone-Einstellungen übernehmen (gedeckelt, damit feste Layouts halten)
+  function applyTextSize() {
+    if (!window.CSS || !CSS.supports("font", "-apple-system-body")) return;
+    const probe = el("span", { textContent: "x" });
+    probe.style.cssText = "font: -apple-system-body; position: absolute; visibility: hidden; pointer-events: none";
+    document.body.append(probe);
+    const px = parseFloat(getComputedStyle(probe).fontSize) || 17;
+    probe.remove();
+    document.documentElement.style.setProperty("--ts", String(Math.min(1.35, Math.max(0.88, px / 17))));
+  }
+  applyTextSize();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") applyTextSize(); });
 
   // ---------- Tabs ----------
   // ---------- Bewegung: Übergänge wie in iOS ----------
@@ -379,7 +394,7 @@
     const del = el("button", { className: "event-del", type: "button", textContent: "✕", ariaLabel: "Termin löschen" });
     del.addEventListener("click", async () => {
       if (!confirm(`„${ev.title}" löschen?`)) return;
-      try { await api(`/api/events/${ev.id}`, { method: "DELETE" }); onChange(); } catch (e) { alert(e.message); }
+      try { await api(`/api/events/${ev.id}`, { method: "DELETE" }); onChange(); } catch (e) { showToast(e.message); }
     });
     const color = el("span", { className: "event-color" });
     color.style.setProperty("--c", ev.color || DEFAULT_COLOR);
@@ -529,7 +544,7 @@
       li.classList.toggle("done", !next);
       btn.setAttribute("aria-pressed", String(!next));
       btn.disabled = false;
-      alert(e.message);
+      showToast(e.message);
     }
   }
 
@@ -1233,7 +1248,7 @@
       await sleep(250);
       todoState.todos = todoState.todos.filter((x) => x.id !== t.id);
       renderTodoDetail();
-    } catch (e) { li.classList.remove("leaving"); alert(e.message); }
+    } catch (e) { li.classList.remove("leaving"); showToast(e.message); }
   }
 
   $("todo-back").addEventListener("click", () => { todoState.openId = null; renderTodos(); });
@@ -1245,14 +1260,14 @@
       await api(`/api/lists/${l.id}`, { method: "DELETE" });
       todoState.openId = null;
       await loadTodos();
-    } catch (e) { alert(e.message); }
+    } catch (e) { showToast(e.message); }
   });
 
   $("clear-done").addEventListener("click", async () => {
     try {
       await api(`/api/lists/${todoState.openId}/done`, { method: "DELETE" });
       await loadTodos();
-    } catch (e) { alert(e.message); }
+    } catch (e) { showToast(e.message); }
   });
 
   // Neue Aufgabe: Dialog mit klarem „Hinzufügen“-Knopf (Enter auf der Tastatur geht auch)
@@ -1408,8 +1423,10 @@
     t.textContent = msg;
     t.hidden = false;
     clearTimeout(showToast.timer);
-    showToast.timer = setTimeout(() => { t.hidden = true; }, 4000);
+    // Lange Hinweise bleiben länger stehen (ca. 60 ms pro Zeichen, mindestens 4 s); Antippen schließt sofort
+    showToast.timer = setTimeout(() => { t.hidden = true; }, Math.max(4000, msg.length * 60));
   }
+  $("toast").addEventListener("click", () => { $("toast").hidden = true; });
 
   async function loadPlan() {
     try { planState.classes = await api("/api/timetable"); } catch (e) { $("plan-list").replaceChildren(el("li", { className: "empty", textContent: e.message })); return; }
@@ -1580,7 +1597,7 @@
       if (fromSheet) closeSheet();
       loadPlan();
       renderToday();
-    } catch (e) { alert(e.message); }
+    } catch (e) { showToast(e.message); }
   }
 
   // ---------- Bild-Import ----------
@@ -2451,7 +2468,7 @@
       rs.openId = null;
       showTab("recipes"); // lädt die Liste neu
       showToast("Rezept gelöscht.");
-    } catch (e) { alert(e.message); }
+    } catch (e) { showToast(e.message); }
   }
 
   // ---------- Rezept aus Foto: die KI füllt das Formular vor, gespeichert wird erst nach Prüfung ----------
@@ -2691,7 +2708,7 @@
       li.classList.toggle("done", !next);
       btn.setAttribute("aria-pressed", String(!next));
       btn.disabled = false;
-      alert(e.message);
+      showToast(e.message);
     }
   }
 
@@ -2702,7 +2719,7 @@
       li.classList.add("leaving");
       await sleep(220);
       renderShopping();
-    } catch (e) { alert(e.message); }
+    } catch (e) { showToast(e.message); }
   }
 
   $("shop-form").addEventListener("submit", async (e) => {
@@ -2720,7 +2737,7 @@
       await api("/api/shopping/done", { method: "DELETE" });
       shop.items = shop.items.filter((i) => !i.done);
       renderShopping();
-    } catch (e) { alert(e.message); }
+    } catch (e) { showToast(e.message); }
   });
 
   // Zutaten auswählen; Vorrat (z. B. Mehl, Salz) ist abgewählt und lernt mit
