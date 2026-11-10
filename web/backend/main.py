@@ -886,7 +886,7 @@ def push_test(uid: int = Depends(current_user)):
 @app.post("/api/push/tick")
 def push_tick(x_tick_secret: str | None = Header(default=None)):
     """Wird jede Minute von Cloud Scheduler aufgerufen und verschickt fällige Erinnerungen."""
-    secret = os.getenv("TICK_SECRET", "")
+    secret = os.getenv("TICK_SECRET", "").strip()  # Zeilenumbruch beim Anlegen per PowerShell ignorieren
     if not secret or not x_tick_secret or not hmac.compare_digest(x_tick_secret, secret):
         raise HTTPException(403, "Nicht erlaubt")
     now = time.time()
