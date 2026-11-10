@@ -162,3 +162,20 @@ create index if not exists idx_shopping_user on shopping_items(user_id);
 alter table shopping_items enable row level security;
 grant all on shopping_items to service_role;
 grant all on all sequences in schema public to service_role;
+
+-- ---------- Erinnerungen aufs Handy (Update: bei bestehendem Projekt ausführen) ----------
+alter table events add column if not exists remind_minutes int;
+alter table events add column if not exists remind_at double precision;
+alter table events add column if not exists reminded boolean not null default false;
+create index if not exists idx_events_remind on events(reminded, remind_at);
+create table if not exists push_subs (
+  id bigint generated always as identity primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+alter table push_subs enable row level security;
+grant all on push_subs to service_role;
+grant all on all sequences in schema public to service_role;
