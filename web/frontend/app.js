@@ -86,6 +86,7 @@
   });
 
   function logout(clearChat = true) {
+    forgetPushDevice(token);
     token = "";
     store.del("token");
     store.del("avatar"); myAvatar = ""; // die Figur gehört zum Konto
@@ -1030,6 +1031,8 @@
       $("f-icon").value = ev.icon || "";
       $("f-private").checked = !!ev.private;
     }
+    $("f-remind").value = ev && ev.remind_minutes != null ? String(ev.remind_minutes) : "";
+    updateRemindHint();
     markIcon();
     $("f-error").hidden = true;
     $("sheet-backdrop").hidden = false;
@@ -1099,6 +1102,7 @@
       note: $("f-note").value.trim(),
       icon: $("f-icon").value.trim(),
       private: $("f-private").checked,
+      remind_minutes: $("f-remind").value === "" ? null : Number($("f-remind").value),
     };
     if (body.end_date < body.start_date) { showFormError("Das Ende liegt vor dem Beginn."); return; }
     if (body.end_time && !body.start_time) { showFormError("Bitte auch einen Beginn angeben."); return; }
@@ -3447,6 +3451,123 @@
   window.addEventListener("scroll", updateNavbar, { passive: true });
   $("nav-back").addEventListener("click", () => { const b = backAction(); if (b) b.run(); });
 
+  // ---------- Erinnerungen aufs Handy (Web Push) ----------
+  // iPhone: nur, wenn Life Hub vom Home-Bildschirm gestartet wird (Safari-Tab kann keine Benachrichtigungen)
+  const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const push = { key: null, on: false, busy: false };
+  const b64ToBytes = (s) => {
+    const raw = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
+  };
+  async function currentPushSub() {
+    if (!pushSupported()) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+
+  function setPushUi(status, button = "", test = false) {
+    $("push-status").textContent = status;
+    $("push-toggle").hidden = !button;
+    $("push-toggle").textContent = button;
+    $("push-toggle").disabled = push.busy;
+    $("push-test").hidden = !test;
+  }
+
+  // Zeigt den Stand auf diesem Gerät; `sync` meldet ein bestehendes Abo erneut beim Server an (z. B. nach Kontowechsel)
+  async function renderPush(sync = false) {
+    if (!pushSupported()) {
+      setPushUi(isIOS() && !isStandalone()
+        ? "Auf dem iPhone: in Safari auf Teilen → „Zum Home-Bildschirm“ tippen und Life Hub dann von dort öffnen."
+        : "Dieser Browser kann keine Benachrichtigungen empfangen.");
+      updateRemindHint();
+      return;
+    }
+    try { if (push.key === null) push.key = (await api("/api/push/key")).key || ""; } catch { push.key = null; }
+    const sub = await currentPushSub().catch(() => null);
+    push.on = !!sub && Notification.permission === "granted";
+    if (push.on && sync) api("/api/push/subscribe", { method: "POST", body: sub.toJSON() }).catch(() => {});
+    if (push.key === "") setPushUi("Auf dem Server noch nicht eingerichtet.");
+    else if (Notification.permission === "denied") setPushUi("Blockiert. Erlaube Benachrichtigungen für Life Hub in den Einstellungen des Geräts.");
+    else if (push.on) setPushUi("Auf diesem Gerät an. Erinnerungen stellst du beim Termin ein.", "Ausschalten", true);
+    else setPushUi("Auf diesem Gerät aus.", "Einschalten");
+    updateRemindHint();
+  }
+
+  async function enablePush() {
+    // Die Erlaubnis zuerst und direkt nach dem Antippen abfragen (Safari verlangt das)
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") throw new Error(perm === "denied" ? "Benachrichtigungen wurden abgelehnt. Erlaube sie in den Einstellungen des Geräts für Life Hub." : "Ohne Erlaubnis gibt es keine Erinnerungen.");
+    if (!push.key) push.key = (await api("/api/push/key")).key || "";
+    if (!push.key) throw new Error("Erinnerungen sind auf dem Server noch nicht eingerichtet.");
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(push.key) });
+    await api("/api/push/subscribe", { method: "POST", body: sub.toJSON() });
+  }
+
+  async function disablePush() {
+    const sub = await currentPushSub();
+    if (!sub) return;
+    await api("/api/push/unsubscribe", { method: "POST", body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe();
+  }
+
+  $("push-toggle").addEventListener("click", async () => {
+    if (push.busy) return;
+    push.busy = true;
+    $("push-toggle").disabled = true;
+    try {
+      if (push.on) { await disablePush(); showToast("Erinnerungen auf diesem Gerät ausgeschaltet."); }
+      else { await enablePush(); showToast("Erinnerungen eingeschaltet. Stell sie beim Termin unter „Erinnerung“ ein."); }
+    } catch (e) { showToast(e.message); }
+    push.busy = false;
+    renderPush();
+  });
+  $("push-test").addEventListener("click", async () => {
+    try { await api("/api/push/test", { method: "POST" }); showToast("Gesendet. Die Benachrichtigung kommt gleich."); }
+    catch (e) { showToast(e.message); }
+  });
+
+  // Beim Abmelden: Gerät beim Server austragen (das Abo im Browser bleibt und gehört nach der nächsten Anmeldung dem neuen Konto)
+  function forgetPushDevice(oldToken) {
+    if (!oldToken || !pushSupported()) return;
+    currentPushSub().then((sub) => {
+      if (sub) fetch(API + "/api/push/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${oldToken}` }, body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+    }).catch(() => {});
+    push.on = false;
+  }
+
+  // Hinweis im Termin-Formular: Bezugszeit bei ganztägigen Terminen, Erinnerungen auf diesem Gerät noch aus
+  function updateRemindHint() {
+    const set = $("f-remind").value !== "";
+    const parts = [];
+    if (set && !$("f-start").value) parts.push("Ganztägig: Die Erinnerung bezieht sich auf 9 Uhr.");
+    if (set && !push.on) parts.push("Auf diesem Gerät sind Benachrichtigungen noch aus (Einstellungen → Erinnerungen aufs Handy).");
+    $("f-remind-hint").textContent = parts.join(" ");
+    $("f-remind-hint").hidden = !parts.length;
+  }
+  $("f-remind").addEventListener("change", updateRemindHint);
+  $("f-start").addEventListener("input", updateRemindHint);
+
+  // Antippen einer Benachrichtigung: den Tag im Kalender zeigen
+  function openDay(day) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+    const d = parseIso(day);
+    state.selected = day; state.year = d.getFullYear(); state.month = d.getMonth();
+    showTab("calendar");
+    selectDate(day);
+  }
+  function takeDayHash() {
+    const m = location.hash.match(/^#day=(\d{4}-\d{2}-\d{2})$/);
+    if (!m) return;
+    window.history.replaceState(null, "", location.pathname + location.search);
+    openDay(m[1]);
+  }
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "open-day" && !$("app").hidden) openDay(e.data.day); });
+  }
+  window.addEventListener("hashchange", () => { if (!$("app").hidden) takeDayHash(); });
+
   // ---------- Start ----------
   async function startApp() {
     // Die App erscheint sofort (der Server braucht nach Ruhezeit einige Sekunden zum Aufwachen).
@@ -3462,6 +3583,8 @@
     showTab(OPTIONAL_TABS.some((t) => t.key === startTab) && !tabOn(startTab) ? "today" : startTab, { animate: false });
     loadFriends();
     takeSharedText();
+    takeDayHash();
+    renderPush(true);
     checkHealth();
     try {
       const me = await api("/api/auth/me");

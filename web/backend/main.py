@@ -235,6 +235,7 @@ class EventIn(BaseModel):
     note: str = Field(default="", max_length=2000)
     icon: str = Field(default="", max_length=16)  # Emoji als Symbol, z. B. 🩺
     private: bool = False  # für Freunde unsichtbar
+    remind_minutes: int | None = Field(default=None, ge=0, le=10080)  # Erinnerung so viele Minuten vorher (höchstens 7 Tage)
 
     @model_validator(mode="after")
     def check(self):
@@ -258,14 +259,30 @@ def get_events(
     return store.list_events(uid, date_from, date_to)
 
 
+BERLIN = ZoneInfo("Europe/Berlin")
+ALLDAY_REMIND_TIME = "09:00"  # ganztägige Termine: Erinnerung bezogen auf 9 Uhr
+
+
+def with_reminder(ev: dict, now: float | None = None, grace: int = 300) -> dict:
+    """Berechnet den Erinnerungszeitpunkt (Berliner Zeit). Liegt er mehr als `grace` Sekunden zurück, wird nichts mehr verschickt
+    (neu angelegt: 5 Minuten Spielraum; beim Bearbeiten keiner, damit eine schon gezeigte Erinnerung nicht noch einmal kommt)."""
+    now = time.time() if now is None else now
+    minutes = ev.get("remind_minutes")
+    if minutes is None:
+        return {**ev, "remind_at": None, "reminded": False}
+    start = datetime.fromisoformat(f"{ev['start_date']}T{ev.get('start_time') or ALLDAY_REMIND_TIME}").replace(tzinfo=BERLIN)
+    at = (start - timedelta(minutes=minutes)).timestamp()
+    return {**ev, "remind_at": at, "reminded": at < now - grace}
+
+
 @app.post("/api/events", status_code=201)
 def post_event(ev: EventIn, uid: int = Depends(current_user)):
-    return store.create_event(uid, ev.model_dump())
+    return store.create_event(uid, with_reminder(ev.model_dump()))
 
 
 @app.put("/api/events/{event_id}")
 def put_event(event_id: int, ev: EventIn, uid: int = Depends(current_user)):
-    row = store.update_event(uid, event_id, ev.model_dump())
+    row = store.update_event(uid, event_id, with_reminder(ev.model_dump(), grace=0))
     if not row:
         raise HTTPException(404, "Termin nicht gefunden")
     return row
@@ -754,6 +771,137 @@ def send_recipe(recipe_id: int, body: RecipeSendIn, uid: int = Depends(current_u
     copy["from_name"] = me_user["username"] if me_user else ""
     store.create_recipe(body.friend_id, copy)
     return {"ok": True}
+
+
+# ---------- Erinnerungen aufs Handy (Web Push) ----------
+# Schlüssel: VAPID_PRIVATE_KEY (Base64url, 32 Byte); der öffentliche Teil wird daraus berechnet.
+# Den minütlichen Weckruf schickt Google Cloud Scheduler an /api/push/tick (Kopfzeile X-Tick-Secret = TICK_SECRET).
+PUSH_HOSTS = ("web.push.apple.com", "fcm.googleapis.com", "android.googleapis.com", "updates.push.services.mozilla.com",
+              "push.services.mozilla.com", "notify.windows.com")
+VAPID_SUBJECT = "https://julian88jul.github.io"  # Kontakt für den Push-Dienst; nur Adresse ohne Pfad erlaubt
+PUSH_STALE = 2 * 3600  # Erinnerungen, die über 2 Stunden zu spät wären, verfallen still
+_vapid_public_cache: dict[str, str] = {}
+
+
+def _vapid_private() -> str:
+    return os.getenv("VAPID_PRIVATE_KEY", "").strip()
+
+
+def _vapid_public() -> str:
+    priv = _vapid_private()
+    if not priv:
+        return ""
+    if priv not in _vapid_public_cache:
+        from cryptography.hazmat.primitives import serialization
+        from py_vapid import Vapid
+        raw = Vapid.from_string(private_key=priv).public_key.public_bytes(
+            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        _vapid_public_cache[priv] = base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    return _vapid_public_cache[priv]
+
+
+def _push_host_ok(endpoint: str) -> bool:
+    from urllib.parse import urlparse
+    u = urlparse(endpoint)
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and any(host == h or host.endswith("." + h) for h in PUSH_HOSTS)
+
+
+def send_push(sub: dict, payload: dict) -> bool:
+    """Schickt eine Nachricht an ein Gerät. False = nicht zugestellt; abgelaufene Anmeldungen (404/410) werden gelöscht."""
+    from pywebpush import WebPushException, webpush
+    try:
+        webpush(subscription_info={"endpoint": sub["endpoint"], "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
+                data=json.dumps(payload, ensure_ascii=False), vapid_private_key=_vapid_private(),
+                vapid_claims={"sub": VAPID_SUBJECT}, ttl=3600, timeout=10)
+        return True
+    except WebPushException as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (404, 410):
+            store.delete_push_sub(sub["endpoint"])
+        return False
+    except Exception:
+        return False
+
+
+def reminder_payload(ev: dict, now: float | None = None) -> dict:
+    """Text der Benachrichtigung, z. B. „🩺 Zahnarzt“ / „Heute, 15:00 Uhr“."""
+    today = datetime.fromtimestamp(time.time() if now is None else now, BERLIN).date()
+    d = date.fromisoformat(ev["start_date"])
+    day = "Heute" if d == today else "Morgen" if d == today + timedelta(days=1) else f"{WEEKDAYS[d.weekday()][:2]}, {d.day}.{d.month}."
+    when = f"{day}, {ev['start_time']} Uhr" if ev.get("start_time") else f"{day} (ganztägig)"
+    title = f"{ev.get('icon') or '📅'} {ev['title']}".strip()
+    return {"title": title, "body": when, "url": f"./#day={ev['start_date']}", "tag": f"event-{ev['id']}"}
+
+
+class PushSubIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=1000)
+    keys: dict[str, str]
+
+    @model_validator(mode="after")
+    def check(self):
+        if not _push_host_ok(self.endpoint):
+            raise ValueError("Unbekannter Push-Dienst.")
+        p256dh, auth_key = self.keys.get("p256dh", ""), self.keys.get("auth", "")
+        if not (20 <= len(p256dh) <= 200 and 8 <= len(auth_key) <= 100):
+            raise ValueError("Ungültige Push-Anmeldung.")
+        return self
+
+
+class PushEndpointIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=1000)
+
+
+@app.get("/api/push/key")
+def push_key(uid: int = Depends(current_user)):
+    key = _vapid_public()
+    return {"key": key, "enabled": bool(key)}
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(body: PushSubIn, uid: int = Depends(current_user)):
+    store.save_push_sub(uid, body.endpoint, body.keys["p256dh"], body.keys["auth"])
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(body: PushEndpointIn, uid: int = Depends(current_user)):
+    store.delete_push_sub(body.endpoint, uid)
+    return {"ok": True}
+
+
+@app.post("/api/push/test")
+def push_test(uid: int = Depends(current_user)):
+    if not _vapid_private():
+        raise HTTPException(503, "Erinnerungen sind auf dem Server noch nicht eingerichtet.")
+    subs = store.list_push_subs(uid)
+    if not subs:
+        raise HTTPException(404, "Auf keinem Gerät sind Benachrichtigungen eingeschaltet.")
+    sent = sum(send_push(s, {"title": "🔔 Life Hub", "body": "So sehen deine Erinnerungen aus.", "url": "./", "tag": "test"}) for s in subs)
+    if not sent:
+        raise HTTPException(502, "Die Nachricht konnte nicht zugestellt werden. Schalte die Benachrichtigungen aus und wieder ein.")
+    return {"sent": sent}
+
+
+@app.post("/api/push/tick")
+def push_tick(x_tick_secret: str | None = Header(default=None)):
+    """Wird jede Minute von Cloud Scheduler aufgerufen und verschickt fällige Erinnerungen."""
+    secret = os.getenv("TICK_SECRET", "")
+    if not secret or not x_tick_secret or not hmac.compare_digest(x_tick_secret, secret):
+        raise HTTPException(403, "Nicht erlaubt")
+    now = time.time()
+    due = store.due_reminders(now)
+    sent = 0
+    subs_cache: dict[int, list[dict]] = {}
+    for ev in due:
+        if ev["remind_at"] < now - PUSH_STALE:
+            continue  # viel zu spät, z. B. nach einem Ausfall: nicht mehr stören
+        if ev["user_id"] not in subs_cache:
+            subs_cache[ev["user_id"]] = store.list_push_subs(ev["user_id"])
+        payload = reminder_payload(ev, now)
+        sent += sum(send_push(s, payload) for s in subs_cache[ev["user_id"]])
+    store.mark_reminded([ev["id"] for ev in due])
+    return {"due": len(due), "sent": sent}
 
 
 # ---------- Einkaufsliste ----------

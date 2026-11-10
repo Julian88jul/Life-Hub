@@ -12,6 +12,17 @@ from contextlib import contextmanager
 import httpx
 
 EVENT_FIELDS = ("title", "start_date", "end_date", "start_time", "end_time", "color", "note", "icon", "private")
+# Erinnerung: Minuten vorher (None = keine), Zeitpunkt als Unix-Sekunden, schon verschickt?
+REMIND_FIELDS = ("remind_minutes", "remind_at", "reminded")
+
+
+def _event_values(ev) -> tuple:
+    """Alle speicherbaren Termin-Felder; Termine ohne Erinnerung (Assistent, Import) bekommen Standardwerte."""
+    return (*(ev[f] for f in EVENT_FIELDS), ev.get("remind_minutes"), ev.get("remind_at"), bool(ev.get("reminded")))
+
+
+def _event_json(ev) -> dict:
+    return dict(zip(EVENT_FIELDS + REMIND_FIELDS, _event_values(ev)))
 TODO_PATCH_FIELDS = ("done", "title", "due_date")
 LIST_PATCH_FIELDS = ("name", "emoji", "color")
 CLASS_FIELDS = ("title", "weekday", "start_time", "end_time", "room", "color", "icon")
@@ -33,6 +44,7 @@ def _recipe(row) -> dict:
 def _event(row) -> dict:
     d = dict(row)
     d["private"] = bool(d["private"])
+    d["reminded"] = bool(d.get("reminded"))
     return d
 
 
@@ -116,6 +128,19 @@ class SqliteStore:
                 c.execute("ALTER TABLE events ADD COLUMN icon TEXT NOT NULL DEFAULT ''")
             if "private" not in cols:
                 c.execute("ALTER TABLE events ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
+            if "remind_minutes" not in cols:
+                c.execute("ALTER TABLE events ADD COLUMN remind_minutes INTEGER")
+                c.execute("ALTER TABLE events ADD COLUMN remind_at REAL")
+                c.execute("ALTER TABLE events ADD COLUMN reminded INTEGER NOT NULL DEFAULT 0")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_events_remind ON events(reminded, remind_at)")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS push_subs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    endpoint TEXT NOT NULL UNIQUE,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL)"""
+            )
             c.execute("CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, start_date, end_date)")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS todo_lists (
@@ -257,8 +282,9 @@ class SqliteStore:
     def create_event(self, user_id, ev):
         with self._db() as c:
             cur = c.execute(
-                "INSERT INTO events(user_id,title,start_date,end_date,start_time,end_time,color,note,icon,private) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (user_id, *(ev[f] for f in EVENT_FIELDS)),
+                "INSERT INTO events(user_id,title,start_date,end_date,start_time,end_time,color,note,icon,private,remind_minutes,remind_at,reminded) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (user_id, *_event_values(ev)),
             )
             row = c.execute("SELECT * FROM events WHERE id=?", (cur.lastrowid,)).fetchone()
         return _event(row)
@@ -266,8 +292,9 @@ class SqliteStore:
     def update_event(self, user_id, event_id, ev):
         with self._db() as c:
             cur = c.execute(
-                "UPDATE events SET title=?,start_date=?,end_date=?,start_time=?,end_time=?,color=?,note=?,icon=?,private=? WHERE id=? AND user_id=?",
-                (*(ev[f] for f in EVENT_FIELDS), event_id, user_id),
+                "UPDATE events SET title=?,start_date=?,end_date=?,start_time=?,end_time=?,color=?,note=?,icon=?,private=?,"
+                "remind_minutes=?,remind_at=?,reminded=? WHERE id=? AND user_id=?",
+                (*_event_values(ev), event_id, user_id),
             )
             if cur.rowcount == 0:
                 return None
@@ -449,6 +476,36 @@ class SqliteStore:
         with self._db() as c:
             return c.execute("DELETE FROM shopping_items WHERE user_id=? AND done=1", (user_id,)).rowcount
 
+    # --- Erinnerungen (Web Push) ---
+    def due_reminders(self, now, limit=200):
+        with self._db() as c:
+            rows = c.execute("SELECT * FROM events WHERE reminded=0 AND remind_at IS NOT NULL AND remind_at<=? ORDER BY remind_at LIMIT ?",
+                             (now, limit)).fetchall()
+        return [_event(r) for r in rows]
+
+    def mark_reminded(self, event_ids):
+        if not event_ids:
+            return
+        with self._db() as c:
+            c.execute(f"UPDATE events SET reminded=1 WHERE id IN ({','.join('?' * len(event_ids))})", list(event_ids))
+
+    def list_push_subs(self, user_id):
+        with self._db() as c:
+            return [dict(r) for r in c.execute("SELECT endpoint,p256dh,auth FROM push_subs WHERE user_id=?", (user_id,)).fetchall()]
+
+    def save_push_sub(self, user_id, endpoint, p256dh, auth):
+        """Ein Gerät (endpoint) gehört immer nur zum zuletzt angemeldeten Konto."""
+        with self._db() as c:
+            c.execute("INSERT INTO push_subs(user_id,endpoint,p256dh,auth) VALUES (?,?,?,?) "
+                      "ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,p256dh=excluded.p256dh,auth=excluded.auth",
+                      (user_id, endpoint, p256dh, auth))
+
+    def delete_push_sub(self, endpoint, user_id=None):
+        with self._db() as c:
+            if user_id is None:
+                return c.execute("DELETE FROM push_subs WHERE endpoint=?", (endpoint,)).rowcount > 0
+            return c.execute("DELETE FROM push_subs WHERE endpoint=? AND user_id=?", (endpoint, user_id)).rowcount > 0
+
     # --- Börse ---
     def list_watchlist(self, user_id):
         with self._db() as c:
@@ -598,13 +655,13 @@ class SupabaseStore:
         })
 
     def create_event(self, user_id, ev):
-        r = self.http.post("/events", json={"user_id": user_id, **{f: ev[f] for f in EVENT_FIELDS}}, headers=self.REP)
+        r = self.http.post("/events", json={"user_id": user_id, **_event_json(ev)}, headers=self.REP)
         r.raise_for_status()
         return r.json()[0]
 
     def update_event(self, user_id, event_id, ev):
         r = self.http.patch("/events", params={"id": f"eq.{event_id}", "user_id": f"eq.{user_id}"},
-                            json={f: ev[f] for f in EVENT_FIELDS}, headers=self.REP)
+                            json=_event_json(ev), headers=self.REP)
         r.raise_for_status()
         rows = r.json()
         return rows[0] if rows else None
@@ -762,6 +819,33 @@ class SupabaseStore:
         r.raise_for_status()
         return len(r.json())
 
+    # --- Erinnerungen (Web Push) ---
+    def due_reminders(self, now, limit=200):
+        return self._get("events", {"reminded": "eq.false", "remind_at": f"lte.{now}", "order": "remind_at.asc", "limit": str(limit)})
+
+    def mark_reminded(self, event_ids):
+        if not event_ids:
+            return
+        r = self.http.patch("/events", params={"id": f"in.({','.join(str(int(i)) for i in event_ids)})"}, json={"reminded": True})
+        r.raise_for_status()
+
+    def list_push_subs(self, user_id):
+        return self._get("push_subs", {"user_id": f"eq.{user_id}", "select": "endpoint,p256dh,auth"})
+
+    def save_push_sub(self, user_id, endpoint, p256dh, auth):
+        r = self.http.post("/push_subs", params={"on_conflict": "endpoint"},
+                           json={"user_id": user_id, "endpoint": endpoint, "p256dh": p256dh, "auth": auth},
+                           headers={"Prefer": "resolution=merge-duplicates"})
+        r.raise_for_status()
+
+    def delete_push_sub(self, endpoint, user_id=None):
+        params = {"endpoint": f"eq.{endpoint}"}
+        if user_id is not None:
+            params["user_id"] = f"eq.{user_id}"
+        r = self.http.delete("/push_subs", params=params, headers=self.REP)
+        r.raise_for_status()
+        return bool(r.json())
+
     # --- Börse ---
     def list_watchlist(self, user_id):
         return self._get("watchlist", {"user_id": f"eq.{user_id}", "select": "id,symbol,name,exchange,currency,position",
@@ -863,6 +947,11 @@ list_events = _impl.list_events
 create_event = _impl.create_event
 update_event = _impl.update_event
 delete_event = _impl.delete_event
+due_reminders = _impl.due_reminders
+mark_reminded = _impl.mark_reminded
+list_push_subs = _impl.list_push_subs
+save_push_sub = _impl.save_push_sub
+delete_push_sub = _impl.delete_push_sub
 list_lists = _impl.list_lists
 get_list = _impl.get_list
 create_list = _impl.create_list

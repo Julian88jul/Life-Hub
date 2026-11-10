@@ -536,6 +536,66 @@ with TestClient(main.app) as c:
     check("Überschrift und Backticks entfernt", pt("## Plan\n`code`") == "Plan\ncode")
     check("Normaler Text bleibt", pt("Hallo! 5 * 3 ist 15.") == "Hallo! 5 * 3 ist 15.")
 
+    print("Erinnerungen (Push simuliert)")
+    import time as _t
+    from datetime import datetime as _dt, timedelta as _td
+    from zoneinfo import ZoneInfo as _Z
+    os.environ.pop("VAPID_PRIVATE_KEY", None)
+    os.environ.pop("TICK_SECRET", None)
+    check("Ohne Schlüssel: Push aus", c.get("/api/push/key", headers=H).json() == {"key": "", "enabled": False})
+    check("Test ohne Schlüssel: 503", c.post("/api/push/test", headers=H).status_code == 503)
+    os.environ["VAPID_PRIVATE_KEY"] = "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94"
+    os.environ["TICK_SECRET"] = "tick-geheim"
+    k = c.get("/api/push/key", headers=H).json()
+    check("Öffentlicher Schlüssel abgeleitet", k["enabled"] is True and len(k["key"]) == 87, str(k))
+    sub = {"endpoint": "https://web.push.apple.com/QGk2x0abc", "keys": {"p256dh": "B" * 87, "auth": "A" * 22}}
+    check("Fremder Push-Dienst abgelehnt", c.post("/api/push/subscribe", json={**sub, "endpoint": "https://evil.example/x1234567"}, headers=H).status_code == 422)
+    check("http statt https abgelehnt", c.post("/api/push/subscribe", json={**sub, "endpoint": "http://web.push.apple.com/x1234567"}, headers=H).status_code == 422)
+    check("Test ohne Gerät: 404", c.post("/api/push/test", headers=H).status_code == 404)
+    check("Gerät anmelden", c.post("/api/push/subscribe", json=sub, headers=H).status_code == 200)
+    pushed = []
+
+    def fake_send(s, payload):
+        pushed.append((s["endpoint"], payload))
+        return True
+
+    main.send_push = fake_send
+    check("Test-Nachricht", c.post("/api/push/test", headers=H).json() == {"sent": 1} and pushed[-1][1]["tag"] == "test")
+    now_b = _dt.now(_Z("Europe/Berlin"))
+    soon = now_b + _td(minutes=12)
+    ev_soon = {"title": "Zahnarzt", "icon": "🩺", "start_date": soon.date().isoformat(), "start_time": soon.strftime("%H:%M"), "remind_minutes": 15}
+    r = c.post("/api/events", json=ev_soon, headers=H)
+    check("Termin mit Erinnerung", r.status_code == 201 and r.json()["remind_minutes"] == 15 and r.json()["reminded"] is False, r.text[:160])
+    soon_id = r.json()["id"]
+    later = now_b + _td(days=2)
+    later_id = c.post("/api/events", json={"title": "Später", "start_date": later.date().isoformat(), "remind_minutes": 60}, headers=H).json()["id"]
+    past = now_b - _td(days=1)
+    r = c.post("/api/events", json={"title": "Gestern", "start_date": past.date().isoformat(), "start_time": "10:00", "remind_minutes": 0}, headers=H)
+    check("Vergangene Erinnerung gilt als erledigt", r.json()["reminded"] is True)
+    c.delete(f"/api/events/{r.json()['id']}", headers=H)
+    stale = main.store.create_event(main.auth.verify_token(token), {"title": "Uralt", "start_date": past.date().isoformat(), "end_date": past.date().isoformat(),
+                                                                    "start_time": None, "end_time": None, "color": "#4f46e5", "note": "", "icon": "",
+                                                                    "private": False, "remind_minutes": 0, "remind_at": _t.time() - 3 * 3600, "reminded": False})
+    check("Weckruf ohne Geheimnis verboten", c.post("/api/push/tick").status_code == 403)
+    check("Weckruf mit falschem Geheimnis verboten", c.post("/api/push/tick", headers={"X-Tick-Secret": "falsch"}).status_code == 403)
+    pushed.clear()
+    r = c.post("/api/push/tick", headers={"X-Tick-Secret": "tick-geheim"})
+    check("Fällige Erinnerung verschickt, zu alte still verworfen", r.json() == {"due": 2, "sent": 1}, r.text)
+    check("Inhalt der Benachrichtigung", pushed and pushed[0][1]["title"] == "🩺 Zahnarzt" and pushed[0][1]["body"].endswith(" Uhr")
+          and pushed[0][1]["url"] == f"./#day={ev_soon['start_date']}", str(pushed)[:200])
+    check("Kein zweites Mal", c.post("/api/push/tick", headers={"X-Tick-Secret": "tick-geheim"}).json() == {"due": 0, "sent": 0})
+    r = c.put(f"/api/events/{soon_id}", json={**ev_soon, "title": "Zahnarzt Dr. Weiß"}, headers=H)
+    check("Bearbeiten nach der Erinnerung löst keine zweite aus", r.json()["reminded"] is True)
+    r = c.put(f"/api/events/{later_id}", json={"title": "Später", "start_date": later.date().isoformat(), "remind_minutes": None}, headers=H)
+    check("Erinnerung entfernen", r.json()["remind_minutes"] is None and r.json()["remind_at"] is None)
+    fe = c.get(f"/api/events?from={past.date().isoformat()}&to={later.date().isoformat()}", headers=H).json()
+    check("Termine ohne Erinnerung bleiben ohne", any(e["title"] == "Uralt" for e in fe))
+    check("Gerät abmelden", c.post("/api/push/unsubscribe", json={"endpoint": sub["endpoint"]}, headers=H).status_code == 200)
+    check("Danach kein Gerät mehr", c.post("/api/push/test", headers=H).status_code == 404)
+    check("Push ohne Login gesperrt", c.post("/api/push/subscribe", json=sub).status_code == 401)
+    for i in (soon_id, later_id, stale["id"]):
+        c.delete(f"/api/events/{i}", headers=H)
+
     print("Passwort")
     check("Falsches altes Passwort abgelehnt", c.post("/api/auth/password", json={"old_password": "nope", "new_password": "neuesPasswort1"}, headers=H).status_code == 403)
     check("Zu kurzes neues Passwort abgelehnt", c.post("/api/auth/password", json={"old_password": "geheim1234", "new_password": "kurz"}, headers=H).status_code == 422)

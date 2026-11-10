@@ -1335,3 +1335,15 @@ body.home-editing .w-grip {
 .rs-text { display: block; width: 100%; margin: 12px 0 4px; }
 #rs-friends { margin-bottom: 4px; }
 .sp-list .prop-main b { font-weight: 600; }
+
+/* ---------- Erinnerungen aufs Handy ---------- */
+.push-box {
+  display: flex; align-items: center; gap: 12px; margin: 0 0 6px; padding: 12px;
+  border-radius: 14px; background: var(--field); border: 1px solid var(--line);
+}
+.push-box svg { width: 24px; height: 24px; flex: none; fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.push-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.push-text small { color: var(--muted); font-size: 13px; line-height: 1.35; }
+.push-box .btn.small { flex: none; min-height: 38px; padding: 0 14px; font-size: 14px; }
+.push-test { display: block; margin: -2px 0 4px; min-height: 36px; padding: 4px 0; font-size: 14px; }
+.remind-hint { margin: -4px 0 10px; }

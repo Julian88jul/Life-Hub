@@ -17,7 +17,7 @@
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <script>try{var t=JSON.parse(localStorage.getItem('theme')||'null');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
   <script>window.addEventListener('error',function(e){try{var b=document.getElementById('boot-error');b.textContent='Fehler beim Laden der Seite: '+(e.message||'unbekannt')+' ('+String(e.filename||'').split('/').pop()+':'+(e.lineno||'?')+'). Bitte Seite neu laden oder den Browser-Cache leeren.';b.hidden=false;}catch(_){}});</script>
-  <link rel="stylesheet" href="style.css?v=40">
+  <link rel="stylesheet" href="style.css?v=41">
 </head>
 <body>
   <div id="boot-error" class="boot-error" hidden></div>
@@ -167,6 +167,12 @@
           <span><b>Startseite anpassen</b><small>Widgets und Tabs hinzufügen, entfernen, verschieben</small></span>
           <span class="mc-open" aria-hidden="true">›</span>
         </button>
+        <div class="push-box" id="push-box">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>
+          <span class="push-text"><b>Erinnerungen aufs Handy</b><small id="push-status">Wird geprüft …</small></span>
+          <button type="button" class="btn primary small" id="push-toggle" hidden>Einschalten</button>
+        </div>
+        <button type="button" class="text-btn push-test" id="push-test" hidden>Test-Benachrichtigung senden</button>
         <div class="row-between theme-row">
           <span class="muted">Darstellung</span>
           <div class="seg" id="theme-seg" role="group" aria-label="Darstellung">
@@ -477,6 +483,20 @@
       <label>Beginn<input id="f-start" type="time"></label>
       <label>Ende<input id="f-end" type="time"></label>
     </div>
+    <label>Erinnerung
+      <select id="f-remind">
+        <option value="">Keine</option>
+        <option value="0">Zur Startzeit</option>
+        <option value="5">5 Minuten vorher</option>
+        <option value="15">15 Minuten vorher</option>
+        <option value="30">30 Minuten vorher</option>
+        <option value="60">1 Stunde vorher</option>
+        <option value="120">2 Stunden vorher</option>
+        <option value="1440">1 Tag vorher</option>
+        <option value="2880">2 Tage vorher</option>
+      </select>
+    </label>
+    <p class="hint left remind-hint" id="f-remind-hint" hidden></p>
     <fieldset class="colors">
       <legend>Farbe</legend>
       <div class="swatches" id="f-colors" role="radiogroup" aria-label="Farbe"></div>
@@ -734,8 +754,8 @@
     </div>
   </div>
 
-  <script src="avatars.js?v=40"></script>
-  <script src="config.js?v=40"></script>
-  <script src="app.js?v=40"></script>
+  <script src="avatars.js?v=41"></script>
+  <script src="config.js?v=41"></script>
+  <script src="app.js?v=41"></script>
 </body>
 </html>
