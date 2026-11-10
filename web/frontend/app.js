@@ -91,6 +91,7 @@
     store.del("token");
     store.del("avatar"); myAvatar = ""; // die Figur gehört zum Konto
     store.del("layout"); // die Startseite auch
+    store.del("today-snap"); store.del("market-snap"); renderToday.painted = false;
     if (clearChat) { store.del("chat"); history = []; log.replaceChildren(); }
     $("app").hidden = true;
     $("tabbar").hidden = true;
@@ -574,25 +575,37 @@
     if (widgetOn("market")) { loadMarket(); loadBriefing(); }
     if (widgetOn("recipes")) loadRecipes();
     if (widgetOn("shopping")) loadShopping();
+    // Beim ersten Zeichnen nach dem Start den zuletzt geladenen Stand zeigen (nur vom selben Konto), dann frisch laden
+    const snap = store.get("today-snap", null);
+    if (!renderToday.painted && snap && snap.user === store.get("user", "")) paintToday(snap.evs, snap.todos, snap.classes);
     try {
       const [evs, todos, classes] = await Promise.all([api(`/api/events?from=${todayKey}&to=${weekKey}`), api("/api/todos"), api("/api/timetable")]);
-      renderTodayClasses(classes);
-      const open = todos.filter((t) => !t.done);
-      $("tile-tasks-sub").textContent = open.length ? `${open.length} offen` : "alles erledigt";
-      const dated = open.filter((t) => t.due_date);
-      const todayItems = [
-        ...evs.filter((e) => covers(e, todayKey)).map((e) => ({ kind: "event", data: e, day: todayKey, sortDate: todayKey })),
-        ...dated.filter((t) => t.due_date <= todayKey).map((t) => ({ kind: "task", data: t, sortDate: t.due_date })),
-      ];
-      const upcomingItems = [
-        ...evs.filter((e) => e.start_date > todayKey).map((e) => ({ kind: "event", data: e, day: e.start_date, sortDate: e.start_date })),
-        ...dated.filter((t) => t.due_date > todayKey && t.due_date <= weekKey).map((t) => ({ kind: "task", data: t, sortDate: t.due_date })),
-      ];
-      fillMixed($("today-events"), todayItems, "Heute nichts geplant.", renderToday);
-      fillMixed($("upcoming-events"), upcomingItems, "Keine weiteren Termine oder Aufgaben.", renderToday);
+      paintToday(evs, todos, classes);
+      store.set("today-snap", { user: store.get("user", ""), evs, todos, classes });
     } catch (e) {
-      if (token) $("today-events").replaceChildren(el("li", { className: "empty", textContent: e.message }));
+      if (token && !renderToday.painted) $("today-events").replaceChildren(el("li", { className: "empty", textContent: e.message }));
     }
+  }
+
+  function paintToday(evs, todos, classes) {
+    renderToday.painted = true;
+    const now = new Date();
+    const todayKey = iso(now);
+    const weekKey = iso(addDays(now, 7));
+    renderTodayClasses(classes);
+    const open = todos.filter((t) => !t.done);
+    $("tile-tasks-sub").textContent = open.length ? `${open.length} offen` : "alles erledigt";
+    const dated = open.filter((t) => t.due_date);
+    const todayItems = [
+      ...evs.filter((e) => covers(e, todayKey)).map((e) => ({ kind: "event", data: e, day: todayKey, sortDate: todayKey })),
+      ...dated.filter((t) => t.due_date <= todayKey).map((t) => ({ kind: "task", data: t, sortDate: t.due_date })),
+    ];
+    const upcomingItems = [
+      ...evs.filter((e) => e.start_date > todayKey).map((e) => ({ kind: "event", data: e, day: e.start_date, sortDate: e.start_date })),
+      ...dated.filter((t) => t.due_date > todayKey && t.due_date <= weekKey).map((t) => ({ kind: "task", data: t, sortDate: t.due_date })),
+    ];
+    fillMixed($("today-events"), todayItems, "Heute nichts geplant.", renderToday);
+    fillMixed($("upcoming-events"), upcomingItems, "Keine weiteren Termine oder Aufgaben.", renderToday);
   }
 
   async function checkHealth() {
@@ -609,7 +622,7 @@
   const DEFAULT_LOC = { name: "Berlin", lat: 52.52, lon: 13.405 };
   const getLoc = () => store.get("loc", DEFAULT_LOC);
   let wDay = 0;
-  let wCache = null; // { key, at, hourly }
+  let wCache = store.get("weather-cache", null); // { key, at, hourly }; übersteht einen Neustart
 
   // Nachts (is_day = 0 von Open-Meteo, abhängig von Sonnenauf- und -untergang) Mond statt Sonne
   const wIcon = (c, day = true) =>
@@ -627,6 +640,7 @@
     const hourly = {};
     data.hourly.time.forEach((t, i) => { hourly[t] = { temp: data.hourly.temperature_2m[i], code: data.hourly.weather_code[i], day: data.hourly.is_day[i] === 1 }; });
     wCache = { key, at: Date.now(), hourly };
+    store.set("weather-cache", wCache);
     return hourly;
   }
 
@@ -1952,8 +1966,20 @@
   const hm = (ts) => { const d = new Date(ts * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
   // Watchlist und Kurse; höchstens alle 60 Sekunden neu (außer `force`)
+  // Letzter Stand der Börsen-Karte (Kurse, Indizes, Briefing) übersteht einen Neustart; frische Daten kommen gleich danach
+  function restoreMarket() {
+    const s = store.get("market-snap", null);
+    if (!s || s.user !== store.get("user", "") || mk.loadedAt) return;
+    Object.assign(mk, { watch: s.watch || [], quotes: s.quotes || {}, series: s.series || {}, indices: s.indices || [], available: s.available !== false });
+    if (s.brief && s.brief.day === iso(new Date())) mk.brief = s.brief;
+    renderMarket(); renderIndices(); if (mk.brief) renderBrief();
+  }
+  const saveMarket = () => store.set("market-snap", { user: store.get("user", ""), watch: mk.watch, quotes: mk.quotes, series: mk.series,
+    indices: mk.indices, available: mk.available, brief: mk.brief });
+
   async function loadMarket(force = false) {
     if (!force && Date.now() - mk.loadedAt < 60000) { renderMarket(); return; }
+    restoreMarket();
     mk.loadedAt = Date.now();
     try { mk.watch = await api("/api/watchlist"); } catch { mk.watch = []; }
     try { const q = await api("/api/market/quotes"); mk.available = q.available; mk.quotes = q.quotes || {}; mk.series = q.series || {}; }
@@ -1961,6 +1987,7 @@
     renderMarket();
     try { const o = await api("/api/market/overview"); mk.indices = o.available ? o.indices : []; } catch { mk.indices = []; }
     renderIndices();
+    saveMarket();
   }
 
   // Kleine Verlaufskurve (SVG); grün, wenn der letzte Wert über dem ersten liegt
@@ -1993,7 +2020,8 @@
   // Briefing des Tages (wird beim ersten Abruf des Tages von der KI erstellt)
   async function loadBriefing(force = false) {
     if (!force && mk.brief && !mk.brief.stale && mk.brief.day === iso(new Date())) { renderBrief(); return; }
-    try { mk.brief = await api("/api/market/briefing"); mk.briefErr = ""; } catch (e) { mk.brief = null; mk.briefErr = e.message; }
+    try { mk.brief = await api("/api/market/briefing"); mk.briefErr = ""; saveMarket(); }
+    catch (e) { if (!mk.brief) { mk.brief = null; mk.briefErr = e.message; } } // bei Netzproblemen den letzten Stand behalten
     renderBrief();
   }
 
@@ -3583,8 +3611,21 @@
     window.history.replaceState(null, "", location.pathname + location.search);
     openDay(m[1]);
   }
+  const startedAt = Date.now();
+  const APP_VERSION = ((document.querySelector('script[src*="app.js?v="]') || {}).src || "").match(/v=(\d+)/)?.[1] || "";
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "open-day" && !$("app").hidden) openDay(e.data.day); });
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (!e.data) return;
+      if (e.data.type === "open-day" && !$("app").hidden) openDay(e.data.day);
+      if (e.data.type === "update-ready" && e.data.version && e.data.version !== APP_VERSION) {
+        const busy = !$("sheet-backdrop").hidden || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+        if (Date.now() - startedAt < 6000 && !busy) { location.reload(); return; }
+        showToast("Neue Version geladen. Tippen zum Aktualisieren.");
+        $("toast").addEventListener("click", () => location.reload(), { once: true });
+      }
+    });
+    // Nachfragen, ob der Service Worker inzwischen eine neuere Version geladen hat
+    if (navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage({ type: "hello", version: APP_VERSION });
   }
   window.addEventListener("hashchange", () => { if (!$("app").hidden) takeDayHash(); });
 
