@@ -594,7 +594,10 @@
     const weekKey = iso(addDays(now, 7));
     renderTodayClasses(classes);
     const open = todos.filter((t) => !t.done);
-    $("tile-tasks-sub").textContent = open.length ? `${open.length} offen` : "alles erledigt";
+    $("tile-tasks-num").textContent = String(open.length);
+    $("tile-tasks-sub").textContent = open.length ? "offen" : "alles erledigt";
+    $("tile-events-num").textContent = String(evs.length);
+    paintHero(evs, open.length);
     const dated = open.filter((t) => t.due_date);
     const todayItems = [
       ...evs.filter((e) => covers(e, todayKey)).map((e) => ({ kind: "event", data: e, day: todayKey, sortDate: todayKey })),
@@ -607,6 +610,58 @@
     fillMixed($("today-events"), todayItems, "Heute nichts geplant.", renderToday);
     fillMixed($("upcoming-events"), upcomingItems, "Keine weiteren Termine oder Aufgaben.", renderToday);
   }
+
+  // ---------- Heute: „Als Nächstes“ (nächster Termin groß, Licht nach Tageszeit, Leiste der kommenden 7 Tage) ----------
+  const HERO_LIGHT = [ // ab Stunde: Farbe links, Farbe rechts (Morgenrot, Tageshimmel, Abend, Nacht)
+    [5, "#ff9d5c", "#ff5d8f"], [10, "#4f7cff", "#38c6d9"], [17, "#b04dff", "#ff6a3d"], [21, "#4b4fd8", "#8a3fd1"],
+  ];
+  let heroDay = null;
+  function paintHero(evs, openTasks) {
+    const now = new Date(), todayKey = iso(now), tomorrowKey = iso(addDays(now, 1));
+    const hm = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const light = [...HERO_LIGHT].reverse().find((l) => now.getHours() >= l[0]) || HERO_LIGHT[3];
+    $("hero").style.setProperty("--ha", light[1]);
+    $("hero").style.setProperty("--hb", light[2]);
+    // Nächster Termin: heute noch nicht vorbei, sonst der früheste der kommenden Tage; Uhrzeit-Termine vor ganztägigen
+    const next = evs
+      .filter((e) => e.end_date >= todayKey)
+      .map((e) => {
+        const day = e.start_date < todayKey ? todayKey : e.start_date;
+        const timed = !!e.start_time && e.start_date === day;
+        const end = e.end_time && e.end_date === day ? e.end_time : e.start_time;
+        return { e, day, timed, end, key: `${day} ${timed ? e.start_time : "99:99"}` };
+      })
+      .filter((x) => x.day > todayKey || !x.timed || x.end >= hm)
+      .sort((a, b) => a.key.localeCompare(b.key))[0];
+    let eyebrow = "Heute", big = "Frei", title = "Keine Termine in den nächsten 7 Tagen";
+    let sub = openTasks ? `${openTasks} ${openTasks === 1 ? "Aufgabe" : "Aufgaben"} offen` : "Und alle Aufgaben sind erledigt.";
+    heroDay = todayKey;
+    if (next) {
+      const { e, day, timed } = next;
+      const running = timed && day === todayKey && e.start_time <= hm;
+      const dayWord = day === todayKey ? "Heute" : day === tomorrowKey ? "Morgen" : longDate(day);
+      heroDay = day;
+      eyebrow = running ? "Jetzt" : "Als Nächstes";
+      big = timed ? e.start_time : day === todayKey ? "Heute" : day === tomorrowKey ? "Morgen" : shortDate(day);
+      title = (e.icon ? `${e.icon} ` : "") + e.title;
+      if (running) sub = next.end > e.start_time ? `läuft bis ${next.end} Uhr` : "läuft gerade";
+      else if (timed && day === todayKey) sub = `in ${durText(toMin(e.start_time) - toMin(hm))}`;
+      else if (timed) sub = dayWord;
+      else sub = day === todayKey || day === tomorrowKey ? "ganztägig" : `${WEEKDAYS[parseIso(day).getDay()]} · ganztägig`;
+    }
+    $("hero-eyebrow").textContent = eyebrow;
+    $("hero-big").textContent = big;
+    $("hero-title").textContent = title;
+    $("hero-sub").textContent = sub;
+    // Wochenleiste: heute und die nächsten sechs Tage, Punkt = an dem Tag steht etwas an
+    $("hero-week").replaceChildren(...Array.from({ length: 7 }, (_, i) => {
+      const d = addDays(now, i), key = iso(d);
+      const has = evs.some((e) => covers(e, key));
+      return el("span", { className: "hw-day" + (i === 0 ? " today" : "") + (has ? " has" : "") },
+        el("small", { textContent: WEEKDAYS[d.getDay()].slice(0, 2) }), el("b", { textContent: String(d.getDate()) }), el("i"));
+    }));
+  }
+  $("hero").addEventListener("click", () => { if (heroDay) openDay(heroDay); else showTab("calendar"); });
 
   async function checkHealth() {
     try {

@@ -2,7 +2,7 @@
 // Die Oberfläche kommt aus dem Cache; im Hintergrund wird nach einer neuen Version gefragt. Gibt es eine,
 // bekommt die geöffnete Seite Bescheid (kurz nach dem Start lädt sie still neu, sonst erscheint ein Hinweis).
 // API-Aufrufe laufen nie über diesen Cache.
-const VERSION = "45"; // gleich wie ?v= in index.html
+const VERSION = "46"; // gleich wie ?v= in index.html
 const CACHE = `lifehub-shell-v${VERSION}`;
 const SHELL = ["./", `style.css?v=${VERSION}`, `app.js?v=${VERSION}`, `avatars.js?v=${VERSION}`, `config.js?v=${VERSION}`,
   "manifest.webmanifest", "icon.svg", "icon-192.png", "apple-touch-icon.png"];
